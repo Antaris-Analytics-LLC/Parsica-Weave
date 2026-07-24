@@ -1,0 +1,59 @@
+name: ci
+
+# Runs the full Weave test gate on every push and PR, across the three platforms the
+# plugin ships to. It does not publish anything. macOS and Linux cover the POSIX hook
+# path (and Linux stands in for WSL, which runs the same interpreters and line
+# endings); Windows covers the Git Bash hook path, the interpreter probe, and the
+# line-ending pins that keep the shell shims and workflow scripts runnable after an
+# autocrlf checkout.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install gate tooling
+        run: python -m pip install -U pip pytest
+
+      - name: Full test gate (scrub, gateway, isolation, plain-ASCII, suites)
+        run: python -m pytest scripts -q
+
+      - name: Doctor self-check
+        run: python scripts/doctor.py
+
+      - name: Line-ending pins survive checkout
+        shell: python
+        run: |
+          # A CRLF checkout must never reach the files .gitattributes pins to LF: a
+          # CR in a shebang is "bad interpreter" on POSIX, and a CR in a workflow
+          # script is rejected by the Workflow permission handler as a hidden control
+          # character (which silently kills autonomous enrichment on Windows).
+          import glob, sys
+          pinned = ["bin/parsica-weave", "bin/parsica-weave.py", "hooks/weave-run.sh"]
+          pinned += glob.glob("scripts/*.workflow.js")
+          bad = [p for p in pinned if b"\r" in open(p, "rb").read()]
+          if bad:
+              sys.exit("CR found in LF-pinned files: %r" % bad)
+          print("LF pins hold on", len(pinned), "files")
+
+      - name: Hook launcher smoke (Git Bash on Windows, native bash elsewhere)
+        shell: bash
+        run: |
+          # The SessionStart event through the real launcher: probes the interpreter
+          # chain (skipping the Windows Store python3 stub) and must exit 0 with
+          # valid-or-empty output on a fresh checkout.
+          echo '{"cwd": ".", "session_id": "ci-smoke"}' | bash hooks/weave-run.sh SessionStart

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Parsica Weave CLI (POSIX shim): pick a WORKING Python 3 - probe each candidate and
+# skip any that fails (the Windows Store `python3` stub exits nonzero on the probe),
+# then hand off to the python dispatcher beside us.
+dir=$(dirname -- "$0")
+for py in python3 python "py -3"; do
+  if $py -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' >/dev/null 2>&1; then
+    exec $py "$dir/parsica-weave.py" "$@"
+  fi
+done
+echo "parsica-weave: no working Python 3 found (tried python3, python, py -3)." >&2
+exit 127

@@ -1,0 +1,6 @@
+# build/test artifacts
+__pycache__/
+.pytest_cache/
+*.pyc
+
+*.local.*

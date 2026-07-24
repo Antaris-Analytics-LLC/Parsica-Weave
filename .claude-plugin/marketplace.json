@@ -1,0 +1,12 @@
+{
+  "name": "parsica",
+  "description": "Local-first memory and continuity tools for Claude Code, from Antaris Analytics.",
+  "owner": { "name": "Antaris Analytics" },
+  "plugins": [
+    {
+      "name": "parsica-weave",
+      "source": "./",
+      "description": "Workspace continuity for Claude Code. One continuous agent across every project and session: scrubbed local chat mirror, working sets, journal, lessons, and retrieval-first recall."
+    }
+  ]
+}

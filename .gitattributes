@@ -1,0 +1,17 @@
+# Ship LF everywhere by default so the archive is byte-identical regardless of the build
+# machine's core.autocrlf: git stores text blobs as LF, and eol=lf makes `git archive` and
+# checkout emit LF too rather than inheriting a Windows autocrlf. The .cmd override below
+# keeps CRLF where Windows needs it; the shim/workflow pins below are LF like the default.
+* text=auto eol=lf
+
+# Shell shims MUST stay LF so the shebang works after a Windows checkout (a CRLF
+# "#!/bin/sh\r" is a "bad interpreter" error on POSIX). The .cmd stays CRLF for Windows.
+bin/parsica-weave    text eol=lf
+bin/parsica-weave.py text eol=lf
+bin/parsica-weave.cmd text eol=crlf
+hooks/weave-run.sh   text eol=lf
+
+# Workflow scripts MUST stay LF: the Workflow permission handler rejects a CR (0x0D) as a
+# hidden control character, so a CRLF checkout silently kills autonomous enrichment on a
+# Windows install (git autocrlf would otherwise convert these on checkout).
+scripts/*.workflow.js text eol=lf
