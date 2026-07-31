@@ -95,8 +95,8 @@ def _safe_default_slug(cwd):
     terms = [t for t in store.workspace_refusal_terms() if t]
     # ONE longest-first alternation, via the shared compiler - never a per-term loop. Applying terms
     # sequentially let a SHORTER term consume its own prefix and STRAND the tail of a longer one:
-    # with ["moro", "moro-korra-succession"] configured, "moro" matched first and left
-    # "korra-succession" in the emitted slug, which becomes a real %TEMP% directory name and
+    # with ["vela", "vela-lyra-handoff"] configured, "vela" matched first and left
+    # "lyra-handoff" in the emitted slug, which becomes a real %TEMP% directory name and
     # transits stdout. The oracle below cannot catch that, because it matches whole configured
     # terms and a stranded fragment is not one. This was the third copy of the defect both scrub
     # fences were already fixed for; test_refusal_routing.py now makes a fourth copy impossible.

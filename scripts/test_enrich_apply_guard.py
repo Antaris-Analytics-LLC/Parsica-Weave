@@ -135,7 +135,11 @@ def test_conv_success_echo_satisfies_the_workflow_apply_schema(tmp_path, capsys,
                         ["enrich_apply.py", "--cwd", str(tmp_path), "--inbox", str(inbox)])
     enrich_apply.main()
     data = json.loads(capsys.readouterr().out)
-    assert data == {"applied": 0, "malformed": 0}
+    # `swept` joined the handshake when apply began deleting the staged copies whose enrichment
+    # landed. Kept as exact equality rather than loosened to a subset check: the strictness is
+    # the point here, because the workflow schema is additionalProperties:false and an UNEXPECTED
+    # key is exactly the failure this test exists to catch.
+    assert data == {"applied": 0, "malformed": 0, "swept": 0}
     _assert_matches_apply_schema(data)
 
 

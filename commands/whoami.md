@@ -5,7 +5,7 @@ description: Show this workspace's agent identity (name, byline state, live prev
 Show the workspace's agent identity. Run:
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" agent
+python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" name
 ```
 
 Relay the readback to the user as-is: the name, the byline state, and the live preview.

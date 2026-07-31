@@ -216,7 +216,11 @@ def test_ordinary_prep_and_apply_still_work_with_no_swap(env, tmp_path, monkeypa
                                       "--inbox", str(inbox)])
     enrich_apply.main()
     apply_out = json.loads(capsys.readouterr().out)
-    assert apply_out == {"applied": 1, "malformed": 0}
+    # swept=2 is the staged .txt and .overlay.json for the one chunk that applied: once an
+    # enrichment lands, its plaintext copy in the system temp dir has done its whole job and no
+    # longer outlives the store the README tells a user to delete. This assertion is incidental
+    # end-to-end evidence for that - the behaviour itself is pinned in test_enrich_inbox_sweep.py.
+    assert apply_out == {"applied": 1, "malformed": 0, "swept": 2}
 
 
 if __name__ == "__main__":

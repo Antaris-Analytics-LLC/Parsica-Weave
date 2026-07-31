@@ -192,7 +192,7 @@ def _identity_name(cfg):
 def _byline_signature(cfg, sess=""):
     """The '[Name · tag]' the byline directs the agent to open each response with - or '[Name]'
     when the session tag is off, or '' when there is no (safe) name or byline is disabled. The single
-    source of truth for both the identity header and the `agent` verb's live preview, so the preview
+    source of truth for both the identity header and the `name` verb's live preview, so the preview
     shows EXACTLY what every reply will carry. Uses the policy-clean identity name."""
     cfg = cfg or {}
     name = _identity_name(cfg)
@@ -503,34 +503,55 @@ def _existing_ids(path):
     return ids
 
 
-def _date_files(md, date):
+def _date_files(md, date, files=None):
     """Every mirror file holding one calendar date's chunks: the legacy shared day-file
     (<date>.jsonl, pre-sharding) plus every per-window shard (<date>.<pid>.jsonl). Listed
     through store.safe_mirror_shard_files (safe-iterdir'd, not glob'd) - RC5L-I: glob() follows
     a symlink/junction exactly like iterdir() does, so a linked shard used to be read as this
-    project's own capture same as an ordinary one."""
+    project's own capture same as an ordinary one.
+
+    `files` is the option-(b) half of the Stop-hook fix (Jake's call, 2026-07-30): a caller
+    that already enumerated the mirror ONCE passes the listing down instead of re-walking the
+    directory per date - the old shape enumerated ~16x per Stop and the walk, not the JSON
+    parse, dominated the measured pre-scan cost."""
     prefix = date + "."
-    return [f for f in store.safe_mirror_shard_files(md) if f.name.startswith(prefix)]
+    fs = files if files is not None else store.safe_mirror_shard_files(md)
+    return [f for f in fs if f.name.startswith(prefix)]
 
 
-def _date_ids(md, date):
+def _date_ids(md, date, files=None):
     """Chunk ids already stored for one date, unioned ACROSS shards - id-dedup must hold
     no matter which window captured a turn first."""
     ids = set()
-    for f in _date_files(md, date):
+    for f in _date_files(md, date, files=files):
         ids |= _existing_ids(f)
     return ids
 
 
 def _recent_ids(md, active_days):
     """Chunk ids already on disk for the most recent ACTIVE DATES (replay/resume dedup).
-    Grouped by calendar date, not file count - per-window shards make files-per-date > 1."""
-    dates = sorted({d for d in (store.mirror_date(f) for f in store.safe_mirror_shard_files(md)) if d},
-                   reverse=True)
+    Grouped by calendar date, not file count - per-window shards make files-per-date > 1.
+    Enumerates the mirror exactly ONCE and passes the listing down (option b folded in)."""
+    files = store.safe_mirror_shard_files(md)
+    dates = sorted({d for d in (store.mirror_date(f) for f in files) if d}, reverse=True)
     ids = set()
     for date in dates[: max(1, int(active_days))]:
-        ids |= _date_ids(md, date)
+        ids |= _date_ids(md, date, files=files)
     return ids
+
+
+def _harvest_mirror_ids(md, active_days):
+    """The COLD-path scan behind the mirror seen-id index: one enumeration, every recent
+    date's ids grouped BY DATE, ready to both serve this flush and seed `mirror_seen` so
+    the next Stop never scans at all. Bounded to the index's own date cap so a fixture-
+    bloated mirror cannot balloon the state file."""
+    files = store.safe_mirror_shard_files(md)
+    dates = sorted({d for d in (store.mirror_date(f) for f in files) if d}, reverse=True)
+    keep = max(max(1, int(active_days)), 1)
+    by_date = {}
+    for date in dates[: min(keep, store.MIRROR_SEEN_DATE_CAP)]:
+        by_date[date] = _date_ids(md, date, files=files)
+    return by_date
 
 
 # --------------------------------------------------------------------------
@@ -594,9 +615,27 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
     if flush_records:
         md = store.mirror_dir(cwd)
         store._verified_dir(md, store.STORE_ROOT, 0o700)
-        seen = _recent_ids(md, cfg["mirror_active_days"])   # skip already-mirrored turns
+        # The mirror seen-id INDEX (Stop-hook fix, option (a) with (b) folded in - Jake's
+        # call, 2026-07-30). Dedup reads STATE, not shards: the warm path does ZERO mirror
+        # enumerations, so the measured pre-scan death curve (3.4s at 420 shards, 11.5s -
+        # past the 10s hook timeout - at ~1,400) is eliminated, not discounted. A cold,
+        # absent, or corrupt index (normalize_state guarantees shape; emptiness marks it
+        # cold) takes ONE bounded enumeration (_harvest_mirror_ids) and seeds the index so
+        # the next Stop is warm. FAIL-OPEN by design: if an append lands but the kill
+        # window eats the index save, the worst case is one duplicate row next Stop -
+        # never lost capture, never a wedged hook.
+        idx = state.get("mirror_seen") or {}
+        index_adds = {}
+        if idx:
+            dseen_by_date = {d: set(ids) for d, ids in idx.items()}
+        else:
+            dseen_by_date = _harvest_mirror_ids(md, cfg["mirror_active_days"])
+            for d, ids in dseen_by_date.items():        # seed the index from the one scan
+                index_adds[d] = set(ids)
+        seen = set()
+        for ids in dseen_by_date.values():              # cross-date replay/resume dedup
+            seen |= ids
         chan = store.current_channel()      # live channel (PARSICA_CHANNEL); "" = untagged
-        dseen_by_date = {}
         # Build-and-write per turn (NOT build-all-then-write): a large per-Stop delta makes
         # incremental, cursor-advanceable progress instead of risking the hook timeout with
         # nothing yet on disk. Per-window (per-PID) shard so concurrent windows append to
@@ -614,9 +653,7 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
                 if not chunk:
                     continue
                 date = _date_of(chunk["ts"])
-                if date not in dseen_by_date:
-                    dseen_by_date[date] = _date_ids(md, date)   # dedup across ALL of the date's shards
-                dseen = dseen_by_date[date]
+                dseen = dseen_by_date.setdefault(date, set())
                 ccid = chunk.get("id")
                 if ccid and ccid in dseen:
                     continue
@@ -624,9 +661,17 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
                 store.append_record(shard, chunk, cfg, content_fields_scrubbed=True)
                 if ccid:
                     dseen.add(ccid)
+                    index_adds.setdefault(date, set()).add(ccid)
                 written_dates.add(date)
             except Exception:
                 continue        # a single malformed record skips its own chunk, never the batch
+        if index_adds:
+            # Rides save_state's locked union merge (the _ledger_add pattern): concurrent
+            # windows UNION their ids instead of clobbering, and the merge applies the
+            # date/id caps. Both hook paths (Stop and PreCompact) already call save_state,
+            # so a net-flush is indexed too - without this, every PreCompact-flushed turn
+            # would re-append as a duplicate on the next Stop.
+            state["_mirror_add"] = {d: sorted(ids) for d, ids in index_adds.items()}
 
     # advance the cursor only on the Stop path (a clean turn boundary). PreCompact
     # leaves it untouched so the next Stop re-reads from that boundary; id-dedup
@@ -1447,6 +1492,47 @@ def handle_note(argv):
     store.emit_json(out)                        # fenced JSON sink (matches the emit at :77)
 
 
+def _body_excerpt(body, width=68):
+    """A single-line, whitespace-collapsed excerpt of a candidate's text, for review.
+
+    `body` is already scrubbed and refusal-fenced at collection time and the line rides
+    store.emit_text on top of that, so this only has to make the text READABLE: first
+    non-empty line, runs of whitespace collapsed, cut at a word boundary when one is near
+    the limit so the excerpt does not end mid-token."""
+    for line in (body or "").splitlines():
+        text = " ".join(line.split())
+        if not text:
+            continue
+        if len(text) <= width:
+            return text
+        cut = text[:width]
+        space = cut.rfind(" ")
+        if space >= width - 16:                  # only prefer a word boundary if it is close
+            cut = cut[:space]
+        return cut.rstrip() + "..."
+    return "(no text)"
+
+
+def _emit_plan_preview(plan):
+    """Name every planned item, in the SAME shape apply_promotion prints as it commits.
+
+    The dry run used to print counts only. An operator reading "store: 540" was told how MANY
+    items land and nothing about WHICH, so the only way to find out was to let them land - the
+    one outcome a dry run exists to prevent, and directly against promote's own instruction to
+    promote only what you want to keep. Parity is the contract: if the commit names an item,
+    the preview names it first, with an excerpt so the name is reviewable rather than just an id.
+
+    Everything is listed. A preview that silently drops its tail reads as complete and is worse
+    than the counts it replaced, so there is deliberately no cap here."""
+    total = len(plan)
+    for i, a in enumerate(plan, 1):
+        c = a.candidate
+        kind = a.kind if a.kind != "skip" else "skip (%s)" % a.reason
+        store.emit_text("[%d/%d] %s %s: %s  |  %s"
+                        % (i, total, kind, c.source_kind, c.source_record_id,
+                           _body_excerpt(c.body)))
+
+
 def handle_promote(argv):
     """`pcx.py promote [--cwd C] [--dry-run] [--verify]` - explicit Weave -> Spirit
     promotion (never wired to a hook). Spirit is OPTIONAL: on the pure-Weave install the
@@ -1708,6 +1794,11 @@ def handle_promote(argv):
     # second pass over an already-marked span, which fence_output does not survive for a term
     # that is a substring of the marker word.
     store.emit_text("Parsica Spirit promotion plan\nscope: %s\nsource: Parsica Weave (%s)" % (sid, pkey))
+    # In a dry run the per-item list comes FIRST, so the totals and "No writes performed." are the
+    # last thing on screen after a long plan scrolls by, instead of the operator having to scroll
+    # back up past 500 lines to find out what the list added up to.
+    if args.dry_run and plan:
+        _emit_plan_preview(plan)
     store.emit_text("candidates: %d" % len(plan))
     for label in sorted(by):
         store.emit_text("  %s: %d" % (label, by[label]))
@@ -1779,20 +1870,26 @@ def _emit_agent_state():
     store.emit_text("\n".join(lines))
 
 
-def handle_agent(argv):
+def handle_name(argv):
     """Operator verb: the WORKSPACE agent identity (name + byline). One name per workspace - no
     project scope and no --scope flag, by design: a single identity across every room (per-project
     names are a separate future effort, most likely channel-based). Touches CONFIG ONLY - agent_name
     is a display label, never a store key, so set/reset never reads, writes, or migrates a chunk.
     No flags = show the current identity plus a live byline preview.
 
-      agent                       show name, byline state, config path, preview
-      agent --name NAME           set the workspace display name
-      agent --byline on|off|name-only    on = [Name] + session tag, name-only = warm [Name], off = none
-      agent --reset               unset name + byline; back to no-name, no-byline, never-nagged
+      name                       show name, byline state, config path, preview
+      name --name NAME           set the workspace display name
+      name --byline on|off|name-only     on = [Name] + session tag, name-only = warm [Name], off = none
+      name --reset               unset name + byline; back to no-name, no-byline, never-nagged
+
+    `--reset` is COSMETIC and stays that way. It clears a display label; it does not decide what
+    the next agent remembers. Putting the memory-carryover ceremony behind this flag would place a
+    destructive choice behind a verb published as harmless, and a user clearing a name by muscle
+    memory would land in a conversation about wiping their store. That ceremony belongs to Spirit,
+    which owns the durable pool; this verb will point at it once that verb exists.
     """
     import argparse
-    ap = argparse.ArgumentParser(prog="pcx.py agent",
+    ap = argparse.ArgumentParser(prog="pcx.py name",
                                  description="Weave agent identity (workspace-global: one name, no scope).")
     ap.add_argument("--name", help="set the workspace display name")
     ap.add_argument("--reset", action="store_true",
@@ -1810,7 +1907,7 @@ def handle_agent(argv):
         ap.error("--reset cannot be combined with --name or --byline")
 
     if args.reset:
-        store.save_global_config(unset=("agent_name", "byline", "byline_session_tag"))
+        _config_write(store.save_global_config, unset=("agent_name", "byline", "byline_session_tag"))
         _emit_agent_state()
         return
     if not mutating:
@@ -1838,8 +1935,128 @@ def handle_agent(argv):
             patch["byline"], patch["byline_session_tag"] = True, False
         else:
             patch["byline"] = False
-    store.save_global_config(patch)
+    _config_write(store.save_global_config, patch)
     _emit_agent_state()
+
+
+def _config_write(fn, *a, **kw):
+    """A config REWRITE that the store refused (existing file unreadable - the fail-closed
+    _read_config_for_rewrite seam) exits with the reason on stdout, never a traceback. The
+    refusal is the feature: writing through a typo'd file would atomically destroy every
+    other setting in it, refusal/human-only lists included."""
+    try:
+        return fn(*a, **kw)
+    except ValueError as exc:
+        store.emit_text("refused: %s" % exc)
+        raise SystemExit(4)
+
+
+_POLICY_VERBS = {
+    "refusal": ("refusal", "refusal",
+                "redacted to <redacted> everywhere content reaches the store"),
+    "human-only": ("human_only_terms", "human-only",
+                   "content that matches is never written to the store at all"),
+}
+
+
+def handle_policy(argv):
+    """Operator verb: edit a policy term list (`refusal` / `human-only`) without ever printing it.
+
+      refusal                     how many terms, and a digest per term - never the term
+      refusal --add TERM          add to this workspace's list (idempotent)
+      refusal --remove TERM       remove it, with a readback of what that changes
+      refusal --project           operate on THIS project's list instead of the workspace one
+
+    `human-only` is the same verb over the stronger list. Two verbs rather than one with a mode
+    flag, because the two lists do genuinely different things and a flag would let a slip put a
+    term on the weaker one.
+
+    Why the listing shows digests and not terms: this list holds the exact words the operator
+    marked as never-to-appear, so printing them would put them on a terminal, in the Claude Code
+    transcript, and into Weave's own chat mirror - the surfaces the list exists to keep them off.
+    It is not only a policy choice either: every CLI surface emits through the refusal fence, so a
+    listing that tried to print terms would render <redacted> for every entry and tell the
+    operator nothing. A digest counts and distinguishes; `--add` is idempotent and says when a
+    term is already present, which is how you check for one without typing it into a record.
+
+    TERM is never echoed back on any path, including errors - it may be the secret itself."""
+    import argparse
+    verb = argv[0]
+    key, label, effect = _POLICY_VERBS[verb]
+    ap = argparse.ArgumentParser(prog="pcx.py %s" % verb,
+                                 description="Manage the %s list (never prints a term)." % label)
+    ap.add_argument("--add", metavar="TERM", help="add a %s term" % label)
+    ap.add_argument("--remove", metavar="TERM", help="remove a %s term" % label)
+    ap.add_argument("--project", action="store_true",
+                    help="operate on THIS project's list instead of the workspace-wide one")
+    ap.add_argument("--cwd", default=os.getcwd(), help="project directory (with --project)")
+    args = ap.parse_args(argv[1:])
+
+    if args.add is not None and args.remove is not None:
+        ap.error("--add and --remove cannot be combined")
+    scope = "project" if args.project else "global"
+    where = "this project" if args.project else "this workspace"
+    mutating = args.add is not None or args.remove is not None
+    if _isolated() and mutating:
+        # Through the fenced sink, not a raw stderr write: the message interpolates the verb, and
+        # the sink discipline gate holds that line for every content-carrying output regardless of
+        # how safe this particular value looks. A constant is the only thing that may skip it.
+        store.emit_text("parsica %s refused: PARSICA_ISOLATED=1 (isolated session, zero "
+                        "footprint - policy is not changed)" % verb, stream=sys.stderr)
+        raise SystemExit(3)
+
+    terms = store.read_policy_list(key, scope, args.cwd)
+
+    def _norm(t):
+        # Compare the way the MATCHER does. A term differing only in case or surrounding space is
+        # the same fence, so adding it twice must not leave two entries and removing it must find
+        # it - otherwise `remove` reports success while the duplicate keeps fencing.
+        return str(t or "").strip().lower()
+
+    if args.add is not None:
+        if not _norm(args.add):
+            ap.error("--add needs a non-empty term")
+        # Minting the digest key is allowed HERE (a write path) and refused on the read path.
+        dkey = store.policy_digest_key(create=True)
+        if any(_norm(t) == _norm(args.add) for t in terms):
+            store.emit_text("already in %s's %s list (%s) - nothing changed."
+                            % (where, label, store.term_digest(args.add, dkey)))
+            return
+        _config_write(store.write_policy_list, key, scope, terms + [args.add.strip()], args.cwd)
+        store.emit_text("added to %s's %s list: %s\n%s\nTakes effect on the next hook; content "
+                        "already captured is not revisited."
+                        % (where, label, store.term_digest(args.add, dkey), effect))
+        return
+
+    if args.remove is not None:
+        dkey = store.policy_digest_key(create=True)
+        keep = [t for t in terms if _norm(t) != _norm(args.remove)]
+        if len(keep) == len(terms):
+            store.emit_text("not in %s's %s list (%s) - nothing changed. Check the other layer: "
+                            "workspace and project lists are unioned, and this verb edits one."
+                            % (where, label, store.term_digest(args.remove, dkey)))
+            return
+        _config_write(store.write_policy_list, key, scope, keep, args.cwd)
+        # Loud by design: removal LOOSENS a fence, and the operator should see exactly how far.
+        store.emit_text(
+            "REMOVED from %s's %s list: %s\n"
+            "From the next hook on, this term is no longer %s.\n"
+            "Content captured while it was listed stays as it was written - already-redacted "
+            "text is not restored, and nothing already withheld is recovered.\n"
+            "%d term(s) remain in this list."
+            % (where, label, store.term_digest(args.remove, dkey), effect, len(keep)))
+        return
+
+    # Listing: a pure read, so it never mints the digest key. Without one there is nothing stored
+    # to digest anyway, and being handed a durable secret just to render an empty list would be
+    # the mint-on-read seam this store refuses everywhere else.
+    dkey = store.policy_digest_key(create=False)
+    store.emit_text("%s list for %s: %d term(s)" % (label, where, len(terms)))
+    for i, t in enumerate(terms, 1):
+        d = store.term_digest(t, dkey) or "(no digest key yet)"
+        store.emit_text("  %d. %s  (%d chars)" % (i, d, len(t.strip())))
+    store.emit_text("Terms are never printed. To check for one, use --add: it is idempotent and "
+                    "says when a term is already there.")
 
 
 def handle_channel(argv):
@@ -2658,8 +2875,15 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "migrate":
         handle_migrate(sys.argv[1:])   # operator verb: loud, like promote
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "agent":
-        handle_agent(sys.argv[1:])     # operator verb: loud, like promote
+    if len(sys.argv) > 1 and sys.argv[1] in _POLICY_VERBS:
+        handle_policy(sys.argv[1:])    # operator verb: loud, like promote
+        return
+    # `name` is the verb; `agent` is the v1.0 spelling, kept working forever and documented
+    # nowhere. The slash command shipped as /name while the CLI said `agent`, so the two surfaces
+    # disagreed from the first release - this makes them agree. No deprecation warning: nagging on
+    # every call of a cosmetic verb is noise, and the alias costs nothing to keep.
+    if len(sys.argv) > 1 and sys.argv[1] in ("name", "agent"):
+        handle_name(sys.argv[1:])      # operator verb: loud, like promote
         return
     data = _read_stdin()
     event = (sys.argv[1] if len(sys.argv) > 1 else data.get("hook_event_name", "")).strip()

@@ -101,11 +101,14 @@ const applied = await agent(
 
 python "${SCRIPTS}/enrich_apply.py" --cwd "${CWD}"
 
-It validates and applies the overlays through the store gateway and prints {"applied":N,"malformed":M}. Return that object verbatim.`,
+It validates and applies the overlays through the store gateway, deletes the staged copies whose enrichment landed, and prints {"applied":N,"malformed":M,"swept":S}. Return that object verbatim.`,
   { label: 'apply', phase: 'Apply',
+    // `swept` is part of the handshake because the schema is additionalProperties:false - a key
+    // the stage prints but the schema omits fails validation and turns a SUCCESSFUL apply into a
+    // stage error, which is the exact failure test_enrich_apply_guard.py was written for.
     schema: { type: 'object', additionalProperties: false,
       properties: { applied: { type: 'number' }, malformed: { type: 'number' },
-                    refused: { type: 'string' } },
+                    swept: { type: 'number' }, refused: { type: 'string' } },
       required: ['applied', 'malformed'] } }
 )
 

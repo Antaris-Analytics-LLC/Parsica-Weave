@@ -12,13 +12,17 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 
 DIRECT = {"doctor": "doctor.py", "query": "query.py",
           "enrich": "enrich.py", "calibrate": "calibrate.py"}
-PCX = {"note", "promote", "channel", "sync", "migrate", "agent"}
+# `agent` is the v1.0 spelling of `name`, kept dispatchable forever and listed nowhere: an
+# installed v1.0 skill, a shell alias or a user's muscle memory must not start erroring on upgrade.
+PCX = {"note", "promote", "channel", "sync", "migrate", "name", "agent",
+       "refusal", "human-only"}
 
 HELP = """parsica-weave <command> [args]
 
   doctor                self-check the install and its trust guarantees
   query [--grep TERM]   retrieve from the chat mirror
-  agent [--name NAME]   show or set the workspace agent name + byline
+  name [--name NAME]    show or set the workspace agent name + byline
+  refusal | human-only  manage your redaction / never-store term lists
   note --kind KIND      write a journal / working-set / lesson entry
   promote               promote durable memory to Parsica Spirit (if installed)
   channel | sync        manage channels / catch up other lanes

@@ -14,8 +14,8 @@ application sites from the source itself and asserts each one routes through the
 A fourth sibling becomes structurally impossible rather than eventually found.
 
 THE RULE. Applying refusal terms per-term is banned everywhere except inside the sanctioned
-compiler. Sequential application is not a style preference: with terms ["moro", "moro-korra"], the
-shorter term matches first, consumes its own prefix, and leaves "-korra" behind - a fragment of a
+compiler. Sequential application is not a style preference: with terms ["vela", "vela-lyra"], the
+shorter term matches first, consumes its own prefix, and leaves "-lyra" behind - a fragment of a
 fenced phrase, in output, that the whole-term oracle cannot recognise as a leak.
 
 WHAT IT WOULD MISS, stated rather than implied: a site that applies terms without any loop and

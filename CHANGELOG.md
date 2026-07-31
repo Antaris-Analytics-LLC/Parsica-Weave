@@ -3,6 +3,71 @@
 All notable changes to Parsica Weave are documented in this file.
 This project follows [Semantic Versioning](https://semver.org).
 
+## [1.0.1] - 2026-07-30
+
+Every fix below shipped with tests proving both directions - the failure refused and the
+legitimate case still passing.
+
+### Fixed
+
+- **Stop-hook capture death.** The capture dedup pre-scan enumerated the mirror directory
+  many times per Stop and parsed every active shard, so a store past roughly 1,400 shards
+  blew the hook timeout and capture stopped permanently and silently. Dedup now reads a
+  seen-id index in `.state.json` (maintained at the append site, unioned under the state
+  lock, fail-open at every edge): measured at 1,500 shards, the pre-scan went from 11.5s
+  to 0.9s cold and 0.012s warm, with zero directory walks on the warm path.
+- **A config typo can no longer wipe your lists.** Rewriting a config file whose existing
+  JSON does not parse used to publish an empty config over it - refusal and human-only
+  lists included. A rewrite of an unreadable file now refuses loudly and writes nothing;
+  an absent file still starts empty.
+- **A torn write no longer destroys the next record.** A mirror append that died mid-line
+  left a partial record with no trailing newline, and the next append glued onto it, so
+  neither parsed. The appender now isolates a torn tail on its own line; the fragment
+  stays lost to its own fault, the new record survives.
+- **The working set cannot be emptied by accident.** Replacing a working set with
+  empty/whitespace content is refused, and every replace leaves the previous version
+  beside it as `.prev`.
+- **A lock that silently is not a lock now says so.** A junction or non-regular file
+  squatting on a `.lock` sidecar degrades locking exactly like a transient timeout, so it
+  was invisible. `doctor` now discovers every lock sidecar under the store and names the
+  unhealthy ones.
+- **Staged enrichment cannot strand.** The enrichment inbox is swept for staged-but-
+  unapplied overlay files, so a killed apply step no longer loses paid-for model work.
+- **The calibration loop's front door.** `query.py --full` now prints a decision's `did`,
+  which the documented calibrate workflow needs and previously never showed.
+- **Honest clocks in query output.** A durable hit's header renders `occurred` at the
+  precision its `clock_source` supports - a synthetic date never converts to a fake
+  wall-clock time, and pool time is labeled as pool time.
+- The append gateway now refuses a redirect by its own containment clause on every
+  platform. The check sat inside `except FileExistsError:`, but a Windows directory
+  junction fails the exclusive create with EACCES, so the clause was never reached and
+  the OS was holding the property instead. Nothing was exploitable either way; the guard
+  now refuses for the reason it names, and the test asserts the refusal sentence rather
+  than that something raised.
+
+### Added
+
+- `refusal` and `human-only` verbs (and `/refusal`, `/human-only`) manage the two policy
+  term lists, keeping the v1.0 README's promise. Neither ever prints a term: the listing
+  gives a count and a per-term digest keyed to a workspace-local secret, because a plain
+  hash of a short codename falls to a wordlist and a transcript full of those would be
+  nearly a transcript full of terms. `--add` is idempotent, which is how you check for a
+  term without recording it; `--remove` says plainly what it loosens and what it does not
+  restore.
+- `promote --dry-run` now names every item it would promote, with an excerpt, instead of
+  reporting counts only. It prints the same per-item list the real run does, so reviewing
+  the preview is reviewing what lands. Nothing is capped.
+
+### Changed
+
+- The identity verb is now `name` (`parsica-weave name --name Aria`, `name --reset`),
+  matching the `/name` slash command it has always paired with. `agent` was too broad a
+  word for a verb that only ever touched a display label. The old spelling still
+  dispatches and always will.
+- README: a scannable top - one-paragraph pitch, an at-a-glance feature list, a
+  three-command quick start, and a table of contents. Two stale "CLI coming soon" notes
+  now point at the verbs this release ships.
+
 ## [1.0.0] - 2026-07-21
 
 Initial public release.

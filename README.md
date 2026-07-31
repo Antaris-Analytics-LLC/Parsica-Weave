@@ -1,32 +1,69 @@
 # Parsica Weave
 
-Weave is the first of two sibling Claude Code addons, and gives you consistent identity across sessions, 
-in different channels, working on different projects, and maintains that continuity and wisdom
-from previous sessions at the Workspace level. One continuous agent across every project and
-session. Weave captures every session automatically, scrubs it for secrets and PII before anything touches
-disk, and gives the agent granular recall of what happened across days and weeks of
-work: not by re-reading old transcripts, but by querying an enriched, provenance-stamped 
-mirror of every session's stored context. This context remains live for 14 *active* days
-(days with real activity, not calendar days) before it is archived, so a quiet week never
-ages a project out.
+One continuous agent across every project and session. Weave captures every Claude Code
+session automatically, scrubs it for secrets and PII before anything touches disk, and
+gives the agent real recall of days and weeks of work - not by re-reading old
+transcripts, but by querying an enriched, provenance-stamped mirror of everything that
+happened. Continuity survives compaction, restarts, new sessions, and project switches:
+compaction just happens, and you carry on like nothing did.
 
-The philosophy is **retrieval over dumping**. A tagged, searchable record of the right
-three chunks beats reloading an entire conversation. Continuity survives compaction,
-new sessions, restarts, and switching projects, and the meter should no longer be something
-you look at with dread. Compaction just happens, and you carry on like nothing ever happened.
-No more handoff threads, no more running notes document for each project just to keep the thread.
+## At a glance
 
-Weave installs as the `parsica-weave` Claude Code plugin - directly from GitHub, or from a
-plugin marketplace that lists it. Standard library Python, no pip dependencies, no network calls, no NPM
-supply chain packages or MCP servers. Storage is also local-first, and the scripts do not call 
-external APIs or open network connections either. Safety and privacy are two of our most important 
-principles.
+- **Automatic capture** - every turn chunked, tagged (files, commands, tools, session,
+  time), scrubbed, and stored; nothing to remember to do
+- **Scrub before store** - credentials and PII redacted at a single tested write
+  gateway no code path can skip
+- **Retrieval over dumping** - `query --grep` returns the right three chunks instead of
+  reloading a conversation
+- **Working set, journal, lessons** - a living per-project scratchpad plus
+  workspace-level history and hard-won lessons, re-injected at every session start
+- **Compaction survival** - complete turns flushed before compaction, orientation
+  re-injected after; the full record stays queryable forever
+- **Semantic enrichment** - topics, summaries, search queries, atomic facts, and
+  decisions with conviction layered over the raw mirror
+- **Refusal and human-only lists** - your own never-to-appear terms, managed by CLI or
+  slash command, fenced everywhere content reaches the store
+- **Channels and isolation** - named session lanes, plus `PARSICA_ISOLATED=1` for full
+  recall with zero footprint
+- **Local-first, stdlib-only** - no pip dependencies, no network calls, no telemetry;
+  plain-text files under `~/.claude/parsica-weave/` that are yours
+- **Retention rotates, never deletes** - aged shards move to `archive/`, still
+  queryable; no code path unlinks user data
 
-Weave is a Claude Code tool and a set of useful features, though, not a sealed vault. 
-Hook-injected recall becomes Claude Code context, and the optional enrichment workflow asks 
-Claude workers to summarize staged chunks, so recalled or enriched text may be sent to the model 
-according to your Claude Code and Anthropic settings. Use `[[human-only]]`, refusal terms, and
-project policy for anything that must never be re-injected or enriched.
+## Quick start
+
+```
+# 1. install + enable the parsica-weave plugin, then verify:
+parsica-weave doctor
+
+# 2. work a few turns in any project, then ask your history:
+parsica-weave query --grep "something you said"
+
+# 3. name your agent (optional, recommended):
+parsica-weave name --name Aria
+```
+
+From here capture is automatic; point your agent at `ONBOARDING.md` for its first thread.
+
+## Contents
+
+- [What it does](#what-it-does)
+- [What's inside](#whats-inside)
+- [Requirements](#requirements)
+- [How to install](#how-to-install)
+- [How to use it](#how-to-use-it) - naming, querying, notes, enrichment
+- [Features you should not overlook](#features-you-should-not-overlook)
+- [Channels](#channels-scope-sessions-into-named-lanes)
+- [Configuration](#configuration)
+- [Data, retention, and uninstall](#data-retention-and-uninstall)
+- [Pairs with Parsica Spirit](#pairs-with-parsica-spirit)
+
+**The trust model, in one paragraph.** Weave is a Claude Code tool, not a sealed vault.
+Hook-injected recall becomes Claude Code context, and the optional enrichment workflow
+asks Claude workers to summarize staged chunks, so recalled or enriched text may be sent
+to the model according to your Claude Code and Anthropic settings. Use `[[human-only]]`,
+refusal terms, and project policy for anything that must never be re-injected or
+enriched.
 
 ---
 
@@ -114,7 +151,7 @@ parsica-weave/
   AUTONOMOUS_ENRICHMENT.md    # the background enrichment swarm: what, why, setup, verification
   config.example.json         # every config key, real defaults, valid JSON - copy, don't retype
   scripts/
-    pcx.py                    # hook engine (Stop / UserPromptSubmit / SessionStart / PreCompact / PostToolUse) + `agent` / `note` / `promote` / `channel` / `sync` / `migrate`
+    pcx.py                    # hook engine (Stop / UserPromptSubmit / SessionStart / PreCompact / PostToolUse) + `name` / `note` / `promote` / `channel` / `sync` / `migrate`
     scrub.py                  # credential/PII redactor + user refusal list (scrub-before-store)
     store.py                  # paths, project keying, config, and the sole-path write gateway
     enrich.py                 # semantic overlay: scrub-on-output guard, categories, decisions + conviction
@@ -187,11 +224,13 @@ workspace, and the agent wakes up in any of them already knowing all of it.
 Likely the first real thing you do after install - the naming ceremony:
 
 ```
-parsica-weave agent --name Aria      name this workspace's agent
-parsica-weave agent                  show the name, byline state, and a live preview
-parsica-weave agent --byline on|name-only|off
-parsica-weave agent --reset          back to no name, no byline
+parsica-weave name --name Aria       name this workspace's agent
+parsica-weave name                   show the name, byline state, and a live preview
+parsica-weave name --byline on|name-only|off
+parsica-weave name --reset           back to no name, no byline
 ```
+
+(`parsica-weave agent ...` was the v1.0 spelling and still works, unchanged.)
 
 Inside Claude Code the same two things are slash commands: `/name <name>` runs the
 ceremony, and `/whoami` shows the current identity, byline state, and live preview.
@@ -281,15 +320,31 @@ a full vote; non-finite and negative values are clamped rather than trusted.
 ## Features you should not overlook
 
 - **Refusal list.** Your own words and phrases, redacted to `<redacted>` everywhere
-  content reaches the store. There is no CLI or slash command for this yet (coming in
-  the first patch) - set it by hand in `~/.claude/parsica-weave/config.json` (global)
-  or `~/.claude/parsica-weave/projects/<project-key>/config.json` (per-project). The
-  file does not need to exist yet or hold anything else; add just the key you want:
-  `{"refusal": ["ProjectX", "internal codename"]}`. No restart needed - it's picked up
-  on the next hook. Matching is case-insensitive substring, so a term is caught even
-  welded inside another word (`media_ProjectX`, `ProjectXClient`). Global and
-  per-project lists are unioned. This lets capture keep running through sensitive work
-  with the sensitive terms fenced, instead of turning continuity off.
+  content reaches the store. Manage it with `parsica-weave refusal` (or `/refusal`):
+
+  ```
+  parsica-weave refusal                 how many terms, and a digest per term
+  parsica-weave refusal --add TERM      add it (idempotent)
+  parsica-weave refusal --remove TERM   remove it, with a readback of what changes
+  parsica-weave refusal --project       this project's list instead of the workspace one
+  ```
+
+  `parsica-weave human-only` is the same verb over the stronger list. **Neither verb
+  ever prints a term** - the list holds the exact words you marked as never-to-appear,
+  and printing them would put them on your terminal, in the transcript, and into
+  Weave's own chat mirror. The listing shows a count and a per-term digest keyed to
+  your workspace, which is enough to count and tell entries apart. To check whether a
+  term is listed, run `--add` on it: it is idempotent and says when it is already
+  there.
+
+  You can still set the lists by hand in `~/.claude/parsica-weave/config.json` (global)
+  or `~/.claude/parsica-weave/projects/<project-key>/config.json` (per-project); the
+  file does not need to exist yet or hold anything else: `{"refusal": ["ProjectX"]}`.
+  No restart needed - it's picked up on the next hook. Matching is case-insensitive
+  substring, so a term is caught even welded inside another word (`media_ProjectX`,
+  `ProjectXClient`). Global and per-project lists are unioned. This lets capture keep
+  running through sensitive work with the sensitive terms fenced, instead of turning
+  continuity off.
 - **Scrub before store, by construction.** Credentials (key prefixes, PEM blocks,
   assignment-style secrets) are always redacted; PII (emails, phones, SSNs, cards) by
   default. Every writer reaches disk through a single gateway in `store.py`, enforced
@@ -362,7 +417,7 @@ just one project - then edit only the keys you want to change. Neither file need
 you want to change something; every key already has a safe default, and a config edit is picked up
 on the next hook, no restart needed. What each key does:
 
-- `agent_name` - Your agent's display name. Set with `/name` or the `agent` verb - see "Naming
+- `agent_name` - Your agent's display name. Set with `/name` or the `name` verb - see "Naming
   your agent." Never a store key, so renaming it never touches your data.
 - `byline` - Once named, the agent opens every reply with `[Name · session-tag]` (prompt-layer:
   honored by the agent, not enforced by a gate). Set `false` to turn it off entirely.
@@ -385,9 +440,10 @@ on the next hook, no restart needed. What each key does:
 - `promote_reminder` - Nudges you at boot when items are waiting to promote to Spirit's durable
   pool. Only appears if Spirit is installed; set `false` for a quieter start.
 - `refusal` - Enter your chosen refusal terms in this list for them to be included and refused as
-  designed. (CLI and Slash commands for this will be added in the very near future.)
+  designed. Managed by `parsica-weave refusal` / the `/refusal` slash command - see
+  "Features you should not overlook."
 - `human_only_terms` - Same idea as `refusal`, but stronger: a match means the content is never
-  stored at all, not just redacted. (CLI and Slash commands coming here too.)
+  stored at all, not just redacted. Managed by `parsica-weave human-only` / `/human-only`.
 - `pairing_enabled` - When the agent greps your code, it also searches its own memory for the
   same term and surfaces hits. On by default.
 - `pairing_threshold` - How good a match needs to be before it's surfaced during grep-pairing.
@@ -461,7 +517,7 @@ the `CLAUDE_PLUGIN_ROOT` that Claude Code sets for the plugin. To run one yourse
 substitute the plugin's install path for `${CLAUDE_PLUGIN_ROOT}`, and use whichever interpreter name
 your system has - `python` or `python3` (the hooks try `python3`, then `python`, then `py -3`).
 
-## Pairs with Parsica Spirit (delayed, arriving shortly after this)
+## Pairs with Parsica Spirit
 
 Weave is complete on its own. **Parsica Spirit** is the optional memory engine from
 the same family: sharded storage, 11-layer BM25+ retrieval, and a model-free
@@ -481,9 +537,11 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" promote --verify
 python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" promote --migrate-identity
 ```
 
-Every run prints its plan first - the scope, the source project, the candidate count, and
-a line per action - before anything is written. `--dry-run` stops there and performs no
-writes at all, not even creating a pool that does not exist yet. `--verify` compares the
+Every run prints its plan first - the scope, the source project, a line per action naming
+what it is and an excerpt of its text, and the candidate counts - before anything is
+written. `--dry-run` prints exactly the same per-item list the real run does, so what you
+review is what lands; it stops there and performs no writes at all, not even creating a
+pool that does not exist yet. Nothing is elided: a long plan prints long. `--verify` compares the
 store against the sync ledger, printing a `DRIFT:` line per mismatch and exiting `3` when
 it finds any. `--migrate-identity` is the one-time, additive, receipted re-key of a
 pre-release store; back the store up first. `--cwd` picks the project directory and

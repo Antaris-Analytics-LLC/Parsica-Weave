@@ -282,9 +282,18 @@ def _fmt_inner(chunk, full, cal_stats=None):
             tr = calibrate.trajectory(_conviction_value(d),
                                       d.get("did"), stats=cal_stats)
             out.append("  decision: " + _s(str(d.get("text", ""))))
+            # The did is the ONLY handle calibrate.py --target accepts, and SKILL.md sends the
+            # operator here to find it ("visible in the stored overlay / query.py --full").
+            # It was read at the trajectory lookup above and then dropped, so the documented
+            # calibration loop had no reachable entry point short of grepping raw enrich JSONL -
+            # which SKILL.md never mentions. Gated on calibrate's display oracle, not printed
+            # through _s: an id is echoed VERBATIM or WITHHELD, never redacted, because a
+            # half-scrubbed did would round-trip into --target as a different (wrong) key.
+            did = str(d.get("did") or "")
+            handle = f" | did {did}" if calibrate._target_is_clean(did) else ""
             out.append(f"    conviction {tr['conviction_at_creation']} | calibration "
                        f"{tr['calibration']} ({tr['confirmed']:.0f}+/{tr['contradicted']:.0f}-) "
-                       f"| effective {tr['effective_weight']}")
+                       f"| effective {tr['effective_weight']}{handle}")
         if chunk.get("user"):
             out.append("  U: " + _s(chunk["user"]).replace("\n", "\n     "))
         if chunk.get("asst"):
@@ -438,14 +447,35 @@ def _collapse_durables(spirit_hits, warm_chunks):
     return kept, both_ids
 
 
+def _display_clock(h):
+    """The one honest clock for a durable hit's header. Precedence: `occurred` (the canonical
+    event clock) rendered at the precision its `clock_source` supports - a full local stamp
+    only for clock_source='event_ts'; DATE ONLY for rid_date/body_date/created (their
+    midnight/pool placeholders are synthetic, and converting a placeholder to local time
+    would manufacture a brand-new fake wall-clock reading). No occurred -> fall back to
+    `created` explicitly LABELED as the pool clock, so the 423-records-share-one-instant
+    fiction can never again read as event time. Nothing trustworthy -> empty (omitted)."""
+    occ = str(h.get("occurred") or "")
+    src = str(h.get("clock_source") or "")
+    if occ:
+        if src == "event_ts":
+            return store.local_stamp(occ)
+        return occ[:10]                      # date precision: render the date, never the 00:00
+    created = str(h.get("created") or "")
+    if created:
+        return "pooled " + store.local_stamp(created)
+    return ""
+
+
 def _print_durable(h, full):
-    """One durable (Spirit) hit: "[durable] <kind> · <id> · <sess> · <created>", empties
-    omitted - an older parsica_spirit whose hits carry no session/created keys renders
-    exactly the two-part line it always did. `created` is the pool clock (store time,
-    the TWO-CLOCKS note), rendered LOCAL like every display ts (verbatim when unparseable).
-    A native-memory record identifies itself: kind renders as claude-native/<scope> with
-    its heading trail, so recall from the agent's own memory files is always attributed
-    (that content may also be loaded in the window by the platform itself)."""
+    """One durable (Spirit) hit: "[durable] <kind> · <id> · <sess> · <clock>", empties
+    omitted - an older parsica_spirit whose hits carry no session/clock keys renders
+    exactly the two-part line it always did. The clock is `occurred` (the canonical event
+    clock, precision-aware via _display_clock); `created` appears only as an explicitly
+    labeled pool-time fallback. A native-memory record identifies itself: kind renders as
+    claude-native/<scope> with its heading trail, so recall from the agent's own memory
+    files is always attributed (that content may also be loaded in the window by the
+    platform itself)."""
     kind = h.get("kind") or "record"
     head_extra = []
     if h.get("source") == "claude-code-memory":
@@ -453,7 +483,7 @@ def _print_durable(h, full):
         if h.get("heading_path"):
             head_extra.append(str(h.get("heading_path")))
     parts = [kind, h.get("source_record_id") or h.get("id", "")] + head_extra
-    parts += [p for p in (h.get("session") or "", store.local_stamp(h.get("created") or "")) if p]
+    parts += [p for p in (h.get("session") or "", _display_clock(h)) if p]
     print(_s("[durable] " + " · ".join(str(p) for p in parts)))
     body = str(h.get("body") or "")
     if full:

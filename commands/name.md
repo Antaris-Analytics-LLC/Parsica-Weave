@@ -6,7 +6,7 @@ argument-hint: <name>
 Name this workspace's agent. Run the identity verb with the user's chosen name:
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" agent --name "$ARGUMENTS"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" name --name "$ARGUMENTS"
 ```
 
 Relay the warm readback to the user, including the byline preview - it shows exactly

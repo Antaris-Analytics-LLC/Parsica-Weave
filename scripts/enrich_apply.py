@@ -29,6 +29,50 @@ def _load_overlay(path, root):
     return json.loads(text)
 
 
+def _sweep(inbox_path, inbox_parent, applied_ids):
+    """Delete the staged copies whose enrichment has LANDED. Returns the count removed.
+
+    The inbox holds plaintext copies of captured turns, in the system temp dir, outside the
+    documented store. That is fine as a staging area and wrong as a resting place: the README
+    tells a user the store is one directory and that deleting it erases their data, and until
+    this swept, `<temp>/parsica_enrich_inbox/<project>/*.txt` outlived the uninstall. Measured
+    before the fix on the maintainer's own machine: 29 staged turns across 20 project dirs,
+    oldest 8 days. Post-scrub and 0600, so never a third-party exposure - but an erasure promise
+    is not satisfied by "the leftovers are only readable by you".
+
+    Cleanup used to happen only at the START of the NEXT prep run for the SAME project, which
+    means a project enriched once and never again kept its copies forever. Sweeping here ties
+    the lifetime to the data's PURPOSE instead: the moment an overlay is applied through the
+    gateway, the staged copy has done its whole job.
+
+    Scoped narrowly on purpose, because deletion is never a default:
+      * only ids whose overlay actually applied - a malformed or skipped overlay keeps its .txt
+        so a re-run can still retry it;
+      * only inside the re-proven inbox, re-asserting the directory chain before each unlink so
+        a swapped parent cannot redirect the delete;
+      * only the two staging suffixes this pipeline writes;
+      * every failure is swallowed - a leftover file is a far better outcome than a crashed
+        apply, and the next run sweeps it anyway.
+    """
+    import store
+    removed = 0
+    for f in list(store._safe_iterdir(inbox_path, inbox_parent)):
+        stem = None
+        if f.name.endswith(".overlay.json"):
+            stem = f.name[: -len(".overlay.json")]
+        elif f.name.endswith(".txt"):
+            stem = f.name[: -len(".txt")]
+        if stem is None or stem not in applied_ids:
+            continue
+        try:
+            store._assert_existing_dir_chain(inbox_path, inbox_parent)
+            f.unlink()
+            removed += 1
+        except (store.MigrationRefused, OSError):
+            pass
+    return removed
+
+
 def main():
     ap = argparse.ArgumentParser(prog="enrich_apply.py")
     ap.add_argument("--cwd", required=True)
@@ -111,7 +155,10 @@ def main():
             malformed += 1
 
     applied = enrich.apply_enrichments(args.cwd, overlays) if overlays else 0
-    print(json.dumps({"applied": applied, "malformed": malformed}))
+    # Sweep only what LANDED. Gated on applied>0 so a total apply failure leaves every staged
+    # copy in place for a retry rather than discarding the work and the evidence together.
+    swept = _sweep(inbox_path, inbox_parent, set(overlays)) if applied else 0
+    print(json.dumps({"applied": applied, "malformed": malformed, "swept": swept}))
 
 
 if __name__ == "__main__":

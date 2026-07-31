@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""weave agent - the workspace identity verb (v1.0 headline feature).
+"""weave name - the workspace identity verb (v1.0 headline feature, shipped then as `agent`).
 
 One name per workspace: set / show / reset the display name + byline. The verb is CONFIG-ONLY -
 agent_name is a display label, never a store key - so set/reset never reads, writes, or migrates a
 chunk. Show speaks warm plain text (naming an agent is human input; the readback talks like a
-person), fenced through the shared output sink. These tests drive handle_agent directly and prove:
+person), fenced through the shared output sink. These tests drive handle_name directly and prove:
   - show with no name is the plain no-name state, with no suggestion to set one (never nagged),
   - a set name defaults to the full byline; the three byline states map to the right preview,
   - the preview equals what the live identity header actually carries (single source of truth),
   - an empty/whitespace name is rejected; --reset clears the keys; --reset + --name is rejected,
   - isolation refuses mutation (zero footprint) but still shows,
-  - setting a name writes ONLY the global config - no mirror/pool/store data.
+  - setting a name writes ONLY the global config - no mirror/pool/store data,
+  - BOTH spellings still dispatch: `name` and the retired v1.0 `agent`.
 """
 import io
 import json
@@ -37,11 +38,11 @@ def _fresh():
     return root
 
 
-def _run(*argv):
-    """Invoke the verb as the dispatcher does (argv[0] == 'agent'); return the text it prints."""
+def _run(*argv, verb="name"):
+    """Invoke the verb as the dispatcher does (argv[0] is the verb); return the text it prints."""
     buf = io.StringIO()
     with redirect_stdout(buf):
-        pcx.handle_agent(["agent", *argv])
+        pcx.handle_name([verb, *argv])
     return buf.getvalue()
 
 
@@ -185,6 +186,25 @@ def test_config_only_no_store_data():
     jsonl = [p for p in root.rglob("*") if p.suffix == ".jsonl"]
     assert not jsonl, "agent verb wrote store data (must be config-only): %s" % jsonl
     assert (root / "config.json").exists()
+
+
+def test_both_spellings_dispatch_end_to_end():
+    """The rename kept `agent` working - and this has to be proven at the layers that actually
+    ROUTE, not by calling handle_name with a different argv[0]. There are two: bin/parsica-weave.py
+    (its PCX set decides whether the verb reaches pcx.py at all) and pcx.py's own main(). A test
+    that skipped them would pass with `name` missing from the PCX set, which is precisely the
+    upgrade break this compatibility promise exists to prevent - so run the real dispatcher."""
+    import subprocess
+    root = Path(tempfile.mkdtemp(prefix="agent_disp_"))
+    cli = Path(os.path.dirname(os.path.abspath(__file__))).parent / "bin" / "parsica-weave.py"
+    env = dict(os.environ, PARSICA_WEAVE_ROOT=str(root))
+    env.pop("PARSICA_ISOLATED", None)
+    for verb in ("name", "agent"):
+        p = subprocess.run([sys.executable, str(cli), verb],
+                           capture_output=True, text=True, env=env)
+        assert p.returncode == 0, "%r did not dispatch: rc=%d %s" % (verb, p.returncode, p.stderr)
+        # the identity readback, not merely a zero exit: an unknown verb also has to be ruled out
+        assert "no agent name set" in p.stdout, "%r reached the wrong handler: %r" % (verb, p.stdout)
 
 
 def test_output_is_fenced():

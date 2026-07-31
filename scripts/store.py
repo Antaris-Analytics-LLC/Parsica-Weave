@@ -33,6 +33,7 @@ import stat
 import time
 import datetime
 import hashlib
+import hmac
 import secrets
 import tempfile
 import threading
@@ -59,6 +60,17 @@ ENRICH_SPEC = "ctx-enrich/v2"
 # without limit; it resets each SessionStart (a fresh context window). Rides the same locked
 # .state.json merge as `cursors`, so concurrent windows UNION rather than clobber.
 LEDGER_KEY_CAP = 1000
+
+# The mirror seen-id index (Stop-hook fix, 2026-07-30): `mirror_seen` in .state.json maps
+# calendar date -> chunk ids already appended, so the Stop/PreCompact dedup pre-scan reads
+# STATE instead of enumerating and parsing every shard (the measured death curve: 3.4s at
+# 420 shards, past the 10s hook timeout at ~1,400, then capture stops permanently and
+# silently). Maintained at the append site via the `_mirror_add` control flag inside
+# save_state's locked union merge - the `_ledger_add` pattern. Both caps are generous
+# ceilings, not tuning knobs: dates beyond the cap are long-rotated, and a date holding
+# 5,000 real turns is ~50x the heaviest measured day.
+MIRROR_SEEN_DATE_CAP = 32
+MIRROR_SEEN_ID_CAP = 5000
 
 DEFAULT_CONFIG = {
     "agent_name": "",            # display metadata only (rides every inject via the identity
@@ -549,17 +561,45 @@ def _load_json(p, default):
         return json.loads(json.dumps(default))  # deep copy of default
 
 
+def _read_config_for_rewrite(path):
+    """FAIL-CLOSED read for any read-modify-WRITE of a config file.
+
+    The reader twin (_load_json) degrades an unparseable file to its default, which is right
+    for a READ - a typo'd config must not wedge a hook. It is catastrophically wrong for a
+    REWRITE: the caller would take {} as "the current config", apply its one-key change, and
+    atomically publish the empty dict - destroying every other setting in the file, refusal
+    and human-only lists included, in response to a stray comma. So: absent file -> {} (a
+    legitimately empty start); present but unparseable, non-object, or refused (a linked
+    config is not a rewrite target) -> ValueError, and the caller writes NOTHING. The message
+    names the file and the fault class only - config content never rides an error."""
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(_read_json_no_follow(path, STORE_ROOT))
+    except Exception as exc:
+        raise ValueError(
+            "refusing to rewrite %s: the existing file could not be read back (%s). Fix the "
+            "JSON syntax (or move the file aside) and re-run - overwriting would destroy "
+            "every setting in it, including any refusal/human-only lists."
+            % (path.name, type(exc).__name__))
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "refusing to rewrite %s: the existing file parses to %s, not an object. Fix it "
+            "(or move it aside) and re-run - overwriting would destroy its contents."
+            % (path.name, type(raw).__name__))
+    return raw
+
+
 def save_global_config(patch=None, *, unset=()):
     """Apply a shallow patch to the WORKSPACE-GLOBAL config (GLOBAL_CONFIG only). Reads the RAW
     global config (not the merged view), sets the given DEFAULT_CONFIG keys, removes any `unset`
     keys, and writes atomically with owner-only perms. Keys outside DEFAULT_CONFIG are ignored, so
-    a typo can never plant a junk key. The `agent` identity verb is the sole caller: this touches
+    a typo can never plant a junk key. The `name` identity verb is the sole caller: this touches
     the global config layer and NOTHING else - no project config, no mirror, no pool, no chunk. A
     name/byline change is therefore a config write, never a data migration. Returns the raw dict
-    written."""
-    raw = _load_json(GLOBAL_CONFIG, {})
-    if not isinstance(raw, dict):
-        raw = {}
+    written. Raises ValueError (writing NOTHING) when the existing file cannot be read back -
+    the read-modify-write twin of _load_json's read-only degradation."""
+    raw = _read_config_for_rewrite(GLOBAL_CONFIG)
     for k, v in (patch or {}).items():
         if k in DEFAULT_CONFIG:
             raw[k] = v
@@ -569,6 +609,108 @@ def save_global_config(patch=None, *, unset=()):
     _chmod(GLOBAL_CONFIG.parent, 0o700)
     atomic_write(GLOBAL_CONFIG, json.dumps(raw, ensure_ascii=False, indent=2))
     return raw
+
+
+_DIGEST_KEY_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def policy_digest_key(create=False):
+    """The secret that policy-term digests are keyed under. Returns "" when absent and not minting.
+
+    A term digest exists so an operator can COUNT and DISTINGUISH their refusal entries without
+    the terms themselves reaching a terminal, a Claude Code transcript, or Weave's own chat
+    mirror - which is the surface the list exists to keep them off. A plain hash would not do
+    that: an eight-hex digest of a short codename falls to a wordlist in seconds, so a transcript
+    carrying digests would be very nearly a transcript carrying the terms. Keyed under a secret
+    that lives only in workspace.json (owner-only), a digest is stable within this workspace and
+    meaningless outside it, and anyone who can read the key can already read config.json.
+
+    Minting is a durable WRITE and follows the same discipline as workspace_id: refused on a pure
+    read path and under isolation. A read verb on a store that has never had a term is not given a
+    durable secret just to render an empty list - with no terms there is nothing to digest."""
+    p = STORE_ROOT / "workspace.json"
+    raw = _load_json(p, {})
+    key = raw.get("policy_digest_key")
+    if isinstance(key, str) and _DIGEST_KEY_RE.match(key):
+        return key
+    if not create or is_isolated():
+        return ""
+    os.makedirs(STORE_ROOT, mode=0o700, exist_ok=True)
+    _chmod(STORE_ROOT, 0o700)
+    with _state_lock(p):
+        raw = _load_json(p, {})
+        if not isinstance(raw, dict):
+            raw = {}
+        key = raw.get("policy_digest_key")
+        if isinstance(key, str) and _DIGEST_KEY_RE.match(key):
+            return key
+        key = secrets.token_hex(16)
+        raw["policy_digest_key"] = key
+        atomic_write(p, json.dumps(raw, indent=2))       # preserves workspace_id alongside
+        return key
+
+
+def term_digest(term, key):
+    """Short stable handle for a policy term. "" when there is no key to bind it to.
+
+    Normalized the way the MATCHER sees a term (stripped, lowercased, since matching is
+    case-insensitive), so the same term shows the same digest whether it sits in the global list
+    or a project's - which is what makes a duplicate visible without printing either copy."""
+    if not key:
+        return ""
+    norm = str(term or "").strip().lower().encode("utf-8")
+    return hmac.new(key.encode("ascii"), norm, hashlib.sha256).hexdigest()[:8]
+
+
+POLICY_KEYS = ("refusal", "human_only_terms")
+
+
+def _policy_config_path(scope, cwd=None):
+    if scope == "project":
+        if not cwd:
+            raise ValueError("project scope needs a cwd")
+        return project_dir(cwd) / "config.json"
+    return GLOBAL_CONFIG
+
+
+def read_policy_list(key, scope, cwd=None):
+    """The RAW stored list for one policy key at one layer - never the merged/union view.
+
+    Raw on purpose: this backs an editor, and an editor must show and change exactly what is in
+    the file it writes. Reading the union here would let `remove` report success against a term
+    that lives in a different layer and is still fencing."""
+    if key not in POLICY_KEYS:
+        raise ValueError("not a policy key: %r" % (key,))
+    raw = _load_json(_policy_config_path(scope, cwd), {})
+    vals = raw.get(key) if isinstance(raw, dict) else None
+    if not isinstance(vals, list):
+        return []                                        # a scalar hand-edit is not a term list
+    return [v for v in vals if isinstance(v, str) and v.strip()]
+
+
+def write_policy_list(key, scope, terms, cwd=None):
+    """Replace one policy key at one layer, atomically and owner-only, touching nothing else.
+
+    Reads the RAW file and rewrites it whole, so unrelated keys the operator hand-set survive.
+    Unlike save_global_config this does not gate on DEFAULT_CONFIG membership for the VALUE - the
+    key itself is checked against POLICY_KEYS instead, because a policy list is a list of the
+    operator's own words and has no default to type-match against beyond being a list of str."""
+    if key not in POLICY_KEYS:
+        raise ValueError("not a policy key: %r" % (key,))
+    path = _policy_config_path(scope, cwd)
+    # fail-closed rewrite read (the save_global_config twin): this file HOLDS the policy
+    # lists, so the old degrade-to-{} shape meant one JSON typo + one policy edit wiped
+    # every OTHER policy key in the same atomic publish.
+    raw = _read_config_for_rewrite(path)
+    clean = [str(t) for t in terms if isinstance(t, str) and t.strip()]
+    if clean:
+        raw[key] = clean
+    else:
+        raw.pop(key, None)                               # an emptied list leaves no husk behind
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _chmod(path.parent, 0o700)
+    atomic_write(path, json.dumps(raw, ensure_ascii=False, indent=2))
+    return clean
 
 
 def config_value_ok(key, value):
@@ -799,9 +941,24 @@ def _state_lock(p, timeout=2.0):
 
     The sidecar is opened with the same cross-platform descriptor-authority proof as content
     leaves: exclusive create when absent; otherwise lstat, open without O_CREAT, fstat, and a fresh
-    lstat binding the CURRENT lexical name to the descriptor. That rejects symlinks/junctions even
-    where O_NOFOLLOW is unavailable, plus hardlinks and non-regular objects. A refusal degrades to
-    the same fail-open unlocked path as any other lock-open failure - never a crash, never a block."""
+    lstat binding the CURRENT lexical name to the descriptor. That rejects hardlinks, non-regular
+    objects, and a file symlink swapped in mid-open. A refusal degrades to the same fail-open
+    unlocked path as any other lock-open failure - never a crash, never a block.
+
+    Be precise about WHICH layer rejects a directory JUNCTION here, because it is not this proof:
+    the exclusive create fails EACCES before any descriptor exists, so the OS refuses and the
+    outer handler degrades to unlocked. Nothing is ever written through the redirect - the
+    containment property holds - but it holds because the open failed, not because the proof ran.
+
+    #122 resolution: the containment property is NOT the problem and never was. Locking stays
+    fail-OPEN by policy - a guard that locks a user out of their own continuity over a false
+    positive is a worse product than one that degrades. What was actually wrong is that a planted
+    junction was INDISTINGUISHABLE from an ordinary timeout, so a store could sit unlocked
+    indefinitely with nothing able to say so. Fixed on the diagnosis axis, not the enforcement
+    axis: `lock_health()` below discovers every lock sidecar under the store root and names the
+    ones that are not regular files, and `doctor` reports them. The except clause here is
+    broadened so the reparse check is genuinely REACHED (see the twin in _safe_append_open) - but
+    that is hygiene, not the fix; both paths still degrade to unlocked, deliberately."""
     try:
         lock_path = Path(str(p) + ".lock")
         _verified_parent(lock_path, STORE_ROOT, 0o700)
@@ -810,7 +967,20 @@ def _state_lock(p, timeout=2.0):
         pre = None
         try:
             fd = os.open(str(lock_path), flags | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
+        except OSError as exc:
+            # Keying this to FileExistsError was a control-flow assumption about the platform
+            # rather than a description of the failure: a junction at this name fails EACCES on
+            # Windows, never EEXIST, so control skipped the validation below entirely and landed
+            # in the outer handler. Broadened so the check is reached on ANY create failure.
+            #
+            # Two separate statements, mirroring _safe_append_open, and NOT one `or` - the first
+            # draft of this fix wrote `if not isinstance(exc, FileExistsError) or is_reparse_point(...)`,
+            # where the left operand is True for EACCES, so Python short-circuited and the reparse
+            # check was never evaluated. That reproduced the exact defect being fixed, one line
+            # further down. Evaluate the redirect check unconditionally.
+            redirect = is_reparse_point(lock_path)
+            if redirect or not isinstance(exc, FileExistsError):
+                raise
             pre = os.lstat(str(lock_path))
             _validate_single_regular(pre, lock_path, "lock")
             fd = os.open(str(lock_path), flags)
@@ -860,6 +1030,49 @@ def _state_lock(p, timeout=2.0):
             pass
 
 
+def lock_health(root=None):
+    """DISCOVER every lock sidecar under the store root and report the ones that cannot be locked.
+
+    The diagnosis half of #122. `_state_lock` fails OPEN on purpose - continuity bookkeeping must
+    never wedge a session - but that policy has a cost: a lock name occupied by a directory
+    junction, a symlink, a FIFO, or a directory degrades to "unlocked" identically to a two-second
+    contention timeout. One is transient and fine; the other is permanent and means concurrent
+    sessions have silently been racing the state file for as long as it has been there. Nothing in
+    the system could tell them apart, so nothing could report it.
+
+    DISCOVERY, never a hand-list: it walks for `*.lock` rather than checking a fixed set of names,
+    so a lock sidecar added by a future call site is covered the day it appears instead of the day
+    someone remembers to add it here. A hand-list is vigilance wearing a test's clothes.
+
+    Returns a list of (path, reason) for every unhealthy lock name; an empty list means every lock
+    sidecar found is an ordinary regular file. Read-only and non-raising: this is a doctor probe,
+    and a probe that can itself fail is not a diagnosis.
+    """
+    base = Path(root) if root is not None else STORE_ROOT
+    out = []
+    try:
+        if not base.is_dir():
+            return out
+    except OSError:
+        return out
+    for p in sorted(base.rglob("*.lock")):
+        try:
+            if is_reparse_point(p):
+                out.append((p, "a link or redirect (junction/symlink) - locking silently disabled"))
+                continue
+            st = os.lstat(str(p))
+            if stat.S_ISDIR(st.st_mode):
+                out.append((p, "a directory - locking silently disabled"))
+            elif not stat.S_ISREG(st.st_mode):
+                out.append((p, "not a regular file - locking silently disabled"))
+            elif st.st_nlink > 1:
+                out.append((p, "a hardlink (nlink=%d) - lock state is shared with another name"
+                            % st.st_nlink))
+        except OSError as exc:
+            out.append((p, "could not be inspected: %s" % (exc.strerror or exc)))
+    return out
+
+
 def save_state(cwd, state):
     p = project_dir(cwd) / ".state.json"
     _verified_parent(p, STORE_ROOT, 0o700)
@@ -881,6 +1094,8 @@ def save_state(cwd, state):
     # _ledger_reset=sess_key clears one window's seen-set (a fresh SessionStart).
     ledger_add = merged.pop("_ledger_add", None)
     ledger_reset = merged.pop("_ledger_reset", None)
+    # mirror seen-id index delta (never persisted as a flag): _mirror_add={date:[ids]}
+    mirror_add = merged.pop("_mirror_add", None)
     with _state_lock(p):
         disk = {}
         disk_ok = True                              # absent file = authoritatively empty
@@ -931,7 +1146,12 @@ def save_state(cwd, state):
         # two windows adding different ids UNION instead of one clobbering the other. Reset wins
         # (a fresh window drops the old seen-set), then adds append; each key is bounded to the
         # MOST RECENT LEDGER_KEY_CAP ids. The stale in-memory copy in `merged` is discarded.
-        ledger = dict(disk.get("inject_ledger") or {})
+        # shape-guarded: `disk` is the RAW json read (normalization runs only on the merged
+        # output below), so a hand-corrupted container here is whatever the file says - a
+        # truthy scalar made dict(7) raise INSIDE the locked merge and the whole save was
+        # lost. Found by the mirror_seen corruption test; this line was the identical twin.
+        _raw_ledger = disk.get("inject_ledger")
+        ledger = dict(_raw_ledger) if isinstance(_raw_ledger, dict) else {}
         if ledger_reset is not None:
             ledger[ledger_reset] = []
         if isinstance(ledger_add, dict):
@@ -944,6 +1164,30 @@ def save_state(cwd, state):
                         seen.add(i)
                 ledger[k] = cur[-LEDGER_KEY_CAP:]
         merged["inject_ledger"] = ledger
+        # mirror seen-id index: same discipline as the inject ledger - DISK is authoritative,
+        # this writer's delta unions in (two concurrent windows both keep their appends), the
+        # stale in-memory copy is discarded. Ids are bounded per date (most recent kept) and
+        # dates are bounded newest-first, so a fixture-bloated or long-lived mirror can never
+        # balloon the state file. Dropping an old id or date FAILS OPEN: the flush re-scans
+        # nothing and the worst case is one duplicate row for a turn that old - dedup, not
+        # data, is what the cap spends.
+        _raw_mirror = disk.get("mirror_seen")
+        mirror = dict(_raw_mirror) if isinstance(_raw_mirror, dict) else {}
+        if isinstance(mirror_add, dict):
+            for d, ids in mirror_add.items():
+                if not isinstance(d, str):
+                    continue
+                cur = list(mirror.get(d) or [])
+                have = set(cur)
+                for i in (ids or []):
+                    if isinstance(i, str) and i not in have:
+                        cur.append(i)
+                        have.add(i)
+                mirror[d] = cur[-MIRROR_SEEN_ID_CAP:]
+        if len(mirror) > MIRROR_SEEN_DATE_CAP:
+            for d in sorted(mirror)[: len(mirror) - MIRROR_SEEN_DATE_CAP]:
+                mirror.pop(d, None)
+        merged["mirror_seen"] = mirror
         # Continuity bookkeeping is FAIL-SILENT: a lost cursor update re-injects at worst, never
         # wedges a session, so a persistent write failure is swallowed here. atomic_write does the
         # mkstemp + write-through-descriptor + bounded-retry replace; its raise is caught at this
@@ -1314,8 +1558,22 @@ def _raw_append(path, text):
     unguarded open."""
     path = Path(path)
     fd = _safe_append_open(path, STORE_ROOT, 0o600)
+    # Torn-tail guard (2026-07-30): a write that died mid-line leaves a partial record with
+    # NO trailing newline, and the next append used to GLUE onto it - the concatenated line
+    # parses as neither record, so a single torn write destroyed the NEXT GOOD RECORD too.
+    # If the last byte is not a newline, open this append on a fresh line: the torn fragment
+    # stays isolated (lost to its own fault, recoverable by eye) and the new record survives.
+    # Inspection failure degrades to the old behavior - never a refused append.
+    lead = ""
+    try:
+        if os.fstat(fd).st_size > 0:
+            os.lseek(fd, -1, os.SEEK_END)
+            if os.read(fd, 1) != b"\n":
+                lead = "\n"
+    except OSError:
+        lead = ""
     with os.fdopen(fd, "a", encoding="utf-8") as fh:
-        fh.write(text)
+        fh.write(lead + text)
 
 
 def atomic_write(dst, text, *, mode=0o600, retries=5, root=None):
@@ -1513,13 +1771,55 @@ def append_record(path, record, cfg, forced=False, content_fields_scrubbed=False
     return rec
 
 
+#: Receipt for a refused empty replace. EXACTLY the human_only receipt's shape ({stored, reason})
+#: so every caller that already renders a refusal renders this one too, with no new branch and no
+#: schema change - pcx's note handler reads `stored is False` then `reason`, and nothing else has
+#: to learn about this case.
+_EMPTY_DOC_RECEIPT = {"stored": False, "reason": "empty_replace_refused"}
+
+
 def write_doc(path, text, cfg, forced=False):
     """Scrub free text, then replace-write the whole file. The ONLY full (re)write of a doc
-    (the working set). human_only content is refused before scrub (do-not-index fence) with a receipt and
-    nothing is written. Returns None when written, the block receipt when refused."""
+    (the working set). human_only content is refused before scrub (do-not-index fence) with a
+    receipt and nothing is written. Returns None when written, a receipt when refused.
+
+    REFUSES AN EMPTY REPLACE. This is the one write in the store that destroys rather than adds:
+    the working set is replaced in full, rotation never archives it (rotate handles mirror and
+    enrich shards only), and no copy exists anywhere else. So `echo '' | pcx note --kind working`
+    - a malformed pipe, a command substitution that produced nothing, a heredoc that closed
+    early - truncated the most curated and least reproducible document in the store to zero
+    bytes, and reported {"ok": true, "stored": true}. Reproduced against the shipped v1.0 build.
+
+    Whitespace-only is the line, not a length threshold: an arbitrary minimum would reject a
+    legitimately short working set, while empty is never something anyone means to write.
+    Deliberately clearing the doc stays possible - write a placeholder - so this refuses an
+    ACCIDENT without removing a capability.
+
+    Belt and braces, a single previous copy is kept beside the file before every successful
+    replace, so a bad-but-non-empty write (truncated pipe, wrong variable) is recoverable too.
+    Preserve rather than delete: this is the one document a user cannot reconstruct."""
     if is_human_only_text(text, cfg, forced=forced):
         return dict(_HUMAN_ONLY_RECEIPT)
+    if not (text or "").strip():
+        return dict(_EMPTY_DOC_RECEIPT)
+    _keep_previous(path)
     _raw_write(path, _scrub_text(text, cfg))
+
+
+def _keep_previous(path):
+    """Copy `path` to `<name>.prev` before a full replace. Best-effort and never fatal: a failed
+    backup must not block the write the user asked for, it only means this particular replace is
+    not undoable. ONE generation on purpose - enough to undo the mistake you just made, not a
+    growing pile of copies of a living document."""
+    path = Path(path)
+    try:
+        if not path.is_file():
+            return
+        data = _read_text_no_follow(path, STORE_ROOT)
+        if data.strip():
+            atomic_write(path.parent / (path.name + ".prev"), data, mode=0o600)
+    except Exception:
+        pass
 
 
 def append_doc(path, text, cfg, forced=False):
@@ -2013,26 +2313,39 @@ def _safe_append_open(path, root, mode=0o600):
     non-regular object, a mid-open identity change, or an unwritable parent."""
     path = Path(path)
     _verified_parent(path, root, 0o700)
-    base_flags = (os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    # O_RDWR (not O_WRONLY): the torn-tail guard in _raw_append must READ the file's last
+    # byte through this same proven descriptor before writing. O_APPEND still forces every
+    # WRITE to the end regardless of seek position, so the append discipline is unchanged.
+    base_flags = (os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
                   | getattr(os, "O_NONBLOCK", 0))
     pre = None
     try:
         fd = os.open(str(path), base_flags | os.O_CREAT | os.O_EXCL, mode)
-    except FileExistsError:
+    except OSError as exc:
+        # The redirect check runs on ANY failure of the exclusive create, not only EEXIST. Keying
+        # it to FileExistsError was a control-flow assumption about the platform rather than a
+        # description of the failure: on Windows an O_CREAT|O_EXCL create against a name occupied
+        # by a directory JUNCTION fails with EACCES (PermissionError), never FileExistsError, so
+        # control skipped the branch holding this containment check entirely and landed in the
+        # generic handler. The call still refused - opening a directory for writing fails at the
+        # OS level - which is exactly what made it invisible: every black-box test passed, and
+        # deleting the check would have changed nothing observable. The OPERATING SYSTEM was
+        # silently holding the property the check is named for. Measured with a probe on Windows
+        # against the shipped v1.0 build, not reasoned about.
+        if is_reparse_point(path):
+            raise MigrationRefused("%s is a link or redirect; refusing to append through it"
+                                   % path.name)
+        if not isinstance(exc, FileExistsError):
+            raise MigrationRefused("%s could not be created safely for append: %s"
+                                   % (path.name, exc.strerror or exc))
         try:
-            if is_reparse_point(path):
-                raise MigrationRefused("%s is a link or redirect; refusing to append through it"
-                                       % path.name)
             pre = os.lstat(str(path))
             _validate_single_regular(pre, path, "append to")
             # No O_CREAT here: a raced dangling link cannot materialize an external target.
             fd = os.open(str(path), base_flags)
-        except OSError as exc:
+        except OSError as exc2:
             raise MigrationRefused("%s could not be opened safely for append: %s"
-                                   % (path.name, exc.strerror or exc))
-    except OSError as exc:
-        raise MigrationRefused("%s could not be created safely for append: %s"
-                               % (path.name, exc.strerror or exc))
+                                   % (path.name, exc2.strerror or exc2))
     try:
         _verify_opened_leaf(path, fd, pre, "append to", root)
         _fchmod(fd, mode)
@@ -2341,9 +2654,12 @@ def normalize_config(raw):
 #: The .state.json containers load_state() and save_state() index BY SESSION KEY. Every one must be
 #: a JSON object: a scalar under any of them is a structural fault rather than a value, and there is
 #: no reading of it that is not a crash somewhere downstream.
-_STATE_CONTAINER_KEYS = ("cursors", "sizes", "turns", "checkpoint_due", "inject_ledger")
-#: The four counter/size containers are dict[str, nonneg int]; inject_ledger is dict[str, list[str]].
+_STATE_CONTAINER_KEYS = ("cursors", "sizes", "turns", "checkpoint_due", "inject_ledger",
+                         "mirror_seen")
+#: The four counter/size containers are dict[str, nonneg int]; inject_ledger (keyed by session)
+#: and mirror_seen (keyed by calendar date - the Stop-hook dedup index) are dict[str, list[str]].
 _STATE_INT_CONTAINERS = ("cursors", "sizes", "turns", "checkpoint_due")
+_STATE_IDLIST_CONTAINERS = ("inject_ledger", "mirror_seen")
 
 
 def _nonneg_int(v):
@@ -2396,28 +2712,29 @@ def normalize_state(raw):
             problems.append("state container %r holds %d value(s) that are not nonnegative integers"
                             % (k, bad))
         clean[k] = good
-    if "inject_ledger" not in raw:
-        clean["inject_ledger"] = {}
-    else:
-        il = raw["inject_ledger"]
+    for name in _STATE_IDLIST_CONTAINERS:
+        if name not in raw:
+            clean[name] = {}
+            continue
+        il = raw[name]
         if not isinstance(il, dict):
-            problems.append("state container 'inject_ledger' is %s, not an object"
-                            % type(il).__name__)
-            clean["inject_ledger"] = {}
-        else:
-            good, bad = {}, 0
-            for kk, vv in il.items():
-                if isinstance(kk, str) and isinstance(vv, list):
-                    strs = [x for x in vv if isinstance(x, str)]
-                    if len(strs) != len(vv):
-                        bad += 1
-                    good[kk] = strs
-                else:
+            problems.append("state container %r is %s, not an object"
+                            % (name, type(il).__name__))
+            clean[name] = {}
+            continue
+        good, bad = {}, 0
+        for kk, vv in il.items():
+            if isinstance(kk, str) and isinstance(vv, list):
+                strs = [x for x in vv if isinstance(x, str)]
+                if len(strs) != len(vv):
                     bad += 1
-            if bad:
-                problems.append("state container 'inject_ledger' holds %d value(s) that are not "
-                                "lists of strings" % bad)
-            clean["inject_ledger"] = good
+                good[kk] = strs
+            else:
+                bad += 1
+        if bad:
+            problems.append("state container %r holds %d value(s) that are not "
+                            "lists of strings" % (name, bad))
+        clean[name] = good
     unknown = [k for k in raw if k not in _STATE_CONTAINER_KEYS]
     if unknown:
         notes.append("state document has %d unknown top-level key(s) [%s] - dropped, not activated"

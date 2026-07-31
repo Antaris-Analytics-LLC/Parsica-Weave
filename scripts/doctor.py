@@ -175,7 +175,32 @@ def check_store():
         else:
             line("WARN", "store root perms are %o (expected 0700)" % mode,
                  "run once more to let ensure_workspace tighten it")
+    check_locks(store)
     return store
+
+
+def check_locks(store):
+    """Report lock sidecars that cannot actually be locked.
+
+    Locking fails OPEN by design - continuity bookkeeping must never wedge a session - which
+    means a lock name occupied by a junction, symlink, directory or FIFO degrades to "unlocked"
+    exactly like an ordinary contention timeout. One is transient; the other is permanent and
+    means concurrent sessions have been racing the state file unprotected. This is the only
+    place the two become distinguishable, so it is a WARN with a named cause, never a silent ok.
+    """
+    try:
+        bad = store.lock_health()
+    except Exception as exc:                      # a probe that can fail is not a diagnosis
+        line("WARN", "could not inspect lock sidecars", str(exc))
+        return
+    if not bad:
+        line("ok", "lock sidecars are regular files", "locking is effective")
+        return
+    for p, reason in bad:
+        line("WARN", "lock is ineffective: %s" % p.name, reason)
+    line("WARN", "%d lock sidecar(s) cannot be locked" % len(bad),
+         "writes still succeed but concurrent sessions are unprotected; "
+         "remove the object at that path and it will be recreated")
 
 
 def check_scrub():

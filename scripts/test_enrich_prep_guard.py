@@ -217,12 +217,29 @@ def test_b4_symlink_component_anywhere_in_path_is_detected(tmp_path):
     assert enrich_prep._has_symlink_component(target) is True
 
 
+def _private_tempdir(monkeypatch, tmp_path):
+    """Point default_inbox()'s derivation at THIS test's tmp_path.
+
+    Every test below pins project_key to a fixed slug so the derived path is deterministic - but
+    the path is derived under tempfile.gettempdir(), so without this the fixed slug resolves to
+    ONE shared directory under the machine's real temp. Runs then stage into each other's inbox
+    and leave files behind, and the next run trips _prepare_inbox's "unmarked non-empty inbox"
+    refusal. The guard is right every time; the tests were reaching into shared machine state.
+    A fresh CI runner hides this completely - it only ever bites the second run on a real
+    developer machine, which is the worst place for a suite to be order-dependent."""
+    base = tmp_path / "_tmp"
+    base.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(base))
+    return base
+
+
 def test_4a_clean_default_inbox_echoes_byte_identical_and_not_withheld(tmp_path, capsys, monkeypatch):
     """False-positive direction of the round-4 4a echo fence: with no refusal term anywhere in the
     machine temp path, the success echo is the byte-identical REAL path (the fence is a no-op),
     inbox_withheld is False, and the value equals the deterministic default_inbox BOTH stages
     derive - the normal autonomous pipeline is untouched."""
     import store
+    _private_tempdir(monkeypatch, tmp_path)
     monkeypatch.setattr(store, "project_key", lambda cwd: "proj-clean-12ab34cd")
     monkeypatch.setattr(store, "workspace_refusal_terms", lambda: ["ZZABSENTZZ"])
     monkeypatch.setattr(store, "is_isolated", lambda: False)
@@ -272,17 +289,24 @@ def test_4a_apply_rederives_the_default_inbox_from_cwd(tmp_path, capsys, monkeyp
     really ran over the re-derived dir, not a guess."""
     import store
     import enrich_apply
+    _private_tempdir(monkeypatch, tmp_path)
     monkeypatch.setattr(store, "project_key", lambda cwd: "proj-clean-12ab34cd")
     monkeypatch.setattr(store, "workspace_refusal_terms", lambda: ["ZZABSENTZZ"])
     monkeypatch.setattr(store, "is_isolated", lambda: False)
     inbox = enrich_prep.default_inbox(str(tmp_path))
     os.makedirs(inbox, exist_ok=True)
+    # Stand in for the prep stage this test presumes already ran: apply requires the ownership
+    # marker before it will glob an inbox holding overlays. Under the old shared machine temp the
+    # marker was simply already there from some earlier run, so the setup never had to say so.
+    open(os.path.join(inbox, ".parsica-weave-inbox"), "a", encoding="utf-8").close()
     with open(os.path.join(inbox, "cid-1.overlay.json"), "w", encoding="utf-8") as fh:
         fh.write("{this is not json")
     monkeypatch.setattr(sys, "argv", ["enrich_apply.py", "--cwd", str(tmp_path)])
     enrich_apply.main()
     data = json.loads(capsys.readouterr().out)
-    assert data == {"applied": 0, "malformed": 1}, data
+    # swept=0 because nothing applied: a malformed overlay must KEEP its staged .txt so a re-run
+    # can retry it. That pairing is pinned directly in test_enrich_inbox_sweep.py.
+    assert data == {"applied": 0, "malformed": 1, "swept": 0}, data
 
 
 def test_conv_a_fenced_chunk_id_is_skipped_never_echoed(tmp_path, capsys, monkeypatch):
@@ -297,6 +321,7 @@ def test_conv_a_fenced_chunk_id_is_skipped_never_echoed(tmp_path, capsys, monkey
     term = "beef"
     fenced_id = "cid-12dead%s34567890ab" % term
     clean_id = "cid-0123456789abcdef0123"
+    _private_tempdir(monkeypatch, tmp_path)
     monkeypatch.setattr(store, "project_key", lambda cwd: "proj-clean-12ab34cd")
     monkeypatch.setattr(store, "workspace_refusal_terms", lambda: [term])
     monkeypatch.setattr(store, "is_isolated", lambda: False)
@@ -320,6 +345,7 @@ def test_conv_clean_chunk_ids_all_stage_with_no_skips(tmp_path, capsys, monkeypa
     """FALSE-POSITIVE companion: with no refusal term matching any id, every pending chunk stages
     and skipped_fenced is 0 - the normal autonomous path is untouched by the new skip."""
     import store
+    _private_tempdir(monkeypatch, tmp_path)
     monkeypatch.setattr(store, "project_key", lambda cwd: "proj-clean-12ab34cd")
     monkeypatch.setattr(store, "workspace_refusal_terms", lambda: ["ZZABSENTZZ"])
     monkeypatch.setattr(store, "is_isolated", lambda: False)
@@ -431,6 +457,7 @@ def test_conv_success_echo_satisfies_the_workflow_scan_schema(tmp_path, capsys, 
     """The other direction: the normal staging echo must also match, so the contract test cannot
     pass by only ever exercising the refusal shape."""
     import store
+    _private_tempdir(monkeypatch, tmp_path)
     monkeypatch.setattr(store, "project_key", lambda cwd: "proj-clean-99ff88ee")
     monkeypatch.setattr(store, "workspace_refusal_terms", lambda: ["ZZABSENTZZ"])
     monkeypatch.setattr(store, "is_isolated", lambda: False)

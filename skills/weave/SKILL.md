@@ -205,7 +205,7 @@ to `archive/`), `journal_active_days` (7), `checkpoint_every_n` (20, per session
 `scrub_pii` (true), `max_inject_bytes` (12000), `refusal` (a list of your own
 words/phrases to redact; see Safety), `boot_recent_elsewhere` (false; see below), and
 `agent_name` + `byline` - set through their front door, the identity verb:
-`parsica-weave agent --name <name>` (show: `agent`; states: `--byline on|name-only|off`;
+`parsica-weave name --name <name>` (show: bare `name`; states: `--byline on|name-only|off`;
 clear: `--reset`; one name per workspace, config-only, never a store key). When a name is
 set, open every response with `[Name · <session-tag>]` - the chosen name, visible on every
 reply; `byline_session_tag: false` for name-only.
