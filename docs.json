@@ -1,0 +1,118 @@
+{
+  "theme": "luma",
+  "name": "Parsica Weave Starter Kit",
+  "colors": {
+    "primary": "#c9c92c",
+    "light": "#ffffff",
+    "dark": "#000000"
+  },
+  "logo": {
+    "light": "/images/page_hero_preview.png",
+    "dark": "/images/page_hero_preview.png",
+    "href": "https://parsica.ai"
+  },
+  "favicon": {
+    "light": "/images/Untitled-1-e5b326da633d31d2.jpg",
+    "dark": "/images/moon.webp"
+  },
+  "navbar": {
+    "links": [
+      {
+        "href": "https://antaris.fyi",
+        "label": "Logs"
+      },
+      {
+        "href": "https://parsica.ai",
+        "label": "Parsica"
+      },
+      {
+        "href": "https://antarisanalytics.ai",
+        "label": "Antaris Analytics LLC"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Dashboard",
+      "href": "https://app.mintlify.com"
+    }
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/antarisanalytics",
+      "github": "https://github.com/antaris-analytics-llc",
+      "linkedin": "https://www.linkedin.com/in/antarisai"
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "perplexity",
+      "mcp",
+      "cursor",
+      "vscode"
+    ],
+    "display": "header"
+  },
+  "seo": {
+    "metatags": {
+      "Parsica": "100",
+      "Weave": "95",
+      "Parsica Weave": "95",
+      "Antaris Analytics": "95"
+    },
+    "indexing": "all"
+  },
+  "background": {
+    "image": {
+      "light": "/images/page_hero_preview.png",
+      "dark": "/images/page_hero_preview.png"
+    },
+    "decoration": "gradient",
+    "color": {
+      "light": "#656060",
+      "dark": "#000000"
+    }
+  },
+  "icons": {
+    "library": "fontawesome"
+  },
+  "appearance": {
+    "default": "dark",
+    "strict": true
+  },
+  "thumbnails": {
+    "background": "/images/Knotted.png",
+    "fonts": {
+      "family": "https://www.fontspace.com/get/family/893o2"
+    }
+  },
+  "search": {
+    "prompt": "Get to know Weave"
+  },
+  "api": {
+    "playground": {
+      "display": "interactive"
+    },
+    "url": "full"
+  },
+  "description": "Parsica Weave\n\nOne continuous agent across every project and session. Weave captures every Claude Code session automatically, scrubs it for secrets and PII before anything touches disk, and gives the agent real recall of days and weeks of work - not by re-reading old transcripts, but by querying an enriched, provenance-stamped mirror of everything that happened. Continuity survives compaction, restarts, new sessions, and project switches: compaction just happens, and you carry on like nothing did.",
+  "fonts": {
+    "family": "font-family: \"GaramondItalic\""
+  },
+  "navigation": {
+    "pages": [
+      "Intro",
+      "Agent-Handoff",
+      "Omboarding",
+      "README",
+      "changelog",
+      "bugreport",
+      "FeatureRequests",
+      "config",
+      "LICENCE"
+    ]
+  }
+}
