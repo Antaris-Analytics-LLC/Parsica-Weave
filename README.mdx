@@ -1,0 +1,240 @@
+---
+title: "Parsica Weave"
+description: "Workspace continuity for Claude Code: one continuous agent across every project and session, with scrubbed local capture, retrieval-first recall, and memory that survives compaction."
+sidebarTitle: "README"
+icon: "book"
+tag: "Overview"
+mode: "wide"
+keywords: ["Parsica", "Weave", "README", "Install", "Features", "Overview"]
+---
+
+Parsica Weave gives Claude Code one continuous agent across every project and every
+session. Every turn is captured, chunked, tagged, and scrubbed before it touches disk;
+recall comes from querying an enriched, provenance-stamped mirror instead of re-reading
+transcripts. Continuity survives compaction, restarts, new sessions, and project
+switches - compaction just happens, and you carry on like nothing did.
+
+The store is local, plain-text, and yours: everything lives under
+`~/.claude/parsica-weave/`, no pip dependencies, no telemetry, no external services
+called by Weave itself.
+
+## At a glance
+
+- **Automatic capture** - every turn chunked and tagged (files touched, commands run, tools used, session, timestamp); nothing to remember to do.
+- **Scrub before store** - credentials and PII are redacted at a single tested write gateway that no code path can bypass.
+- **Retrieval over dumping** - `parsica-weave query --grep` returns the right three chunks instead of reloading a whole conversation.
+- **Working set, journal, lessons** - a per-project scratchpad plus workspace-level history and hard-won lessons, re-injected at every session start.
+- **Compaction survival** - complete turns flush before compaction and orientation re-injects after; the full record stays queryable forever.
+- **Semantic enrichment** - topics, summaries, search queries, atomic facts, and decisions layered over the raw mirror by a background swarm.
+- **Refusal and human-only lists** - your own never-to-appear terms, managed by CLI or slash command, fenced everywhere content reaches the store.
+- **Channels and isolation** - named session lanes, plus `PARSICA_ISOLATED=1` for full recall with zero durable footprint.
+- **Native memory import** - with [Parsica Spirit](https://github.com/Antaris-Analytics-LLC/parsica-spirit) installed, the agent's `CLAUDE.md` / `MEMORY.md` files join the durable pool read-only, ranked at the native permanence class, with duplicates collapsed at display.
+- **Local-first, stdlib-only** - standard-library Python, no pip dependencies, no network calls, no telemetry.
+- **Retention rotates, never deletes** - aged shards move to `archive/` and stay queryable; no code path unlinks user data.
+
+## Table of contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [The CLI](#the-cli)
+- [Slash commands](#slash-commands)
+- [Configuration](#configuration)
+- [Session controls](#session-controls)
+- [Safety fences](#safety-fences)
+- [Native memory (with Parsica Spirit)](#native-memory-with-parsica-spirit)
+- [Autonomous enrichment](#autonomous-enrichment)
+- [Repository layout](#repository-layout)
+- [Learn more](#learn-more)
+
+## Install
+
+Parsica Weave installs as the `parsica-weave` Claude Code plugin.
+
+**Requirements**
+
+- Claude Code
+- Python 3 on `PATH` (`python3`, `python`, or `py -3` - the shims probe for a working interpreter)
+- macOS, Linux, or Windows (Git Bash, PowerShell, or `cmd`)
+
+**Install the plugin**
+
+1. Add the `parsica` marketplace and install the `parsica-weave` plugin from the Claude Code plugin manager.
+2. Confirm the install:
+
+   ```bash
+   parsica-weave doctor
+   ```
+
+`doctor` self-checks the install and its trust guarantees: hooks wired, store discoverable, write gateway healthy, `.lock` sidecars sound (a squatted junction now surfaces here instead of failing silently).
+
+<Note>
+On Windows, the Microsoft Store `python3` stub exits nonzero on probe, so the shims
+fall through to a real python.org install. If `doctor` reports no working Python,
+install Python 3 from python.org (not the Microsoft Store).
+</Note>
+
+## Quick start
+
+```bash
+# 1. Verify the install.
+parsica-weave doctor
+
+# 2. Work a few turns in any project, then ask your history.
+parsica-weave query --grep "something you said"
+
+# 3. Name your agent (optional, recommended).
+parsica-weave name --name Aria
+```
+
+From here, capture is automatic. Point your agent at [Onboarding](/Omboarding) for its first thread, and at [Agent-Handoff](/Agent-Handoff) for the story of what it felt like to live inside the system on release night.
+
+## How it works
+
+Weave is hooks plus scripts. The hooks (`Stop`, `UserPromptSubmit`, `SessionStart`, `PreCompact`, `PostToolUse`) fire on Claude Code events and hand off to the store, so capture and rehydration happen without a prompt from you.
+
+Three layers make up the store:
+
+<CardGroup cols={3}>
+  <Card title="Enriched chat mirror" icon="database">
+    One shard per writing window under `mirror/<project-key>/`. Every turn chunked, tagged (files, commands, tools, session, time), scrubbed, and enriched. This is what you query.
+  </Card>
+
+  <Card title="Working set" icon="pin">
+    A per-project living scratchpad at `working/<project-key> - Working Set.md`: pinned facts plus open loops. Re-injected at every session start in that project.
+  </Card>
+
+  <Card title="Journal + lessons" icon="scroll">
+    Workspace-level `journal/<date>.md` and `lessons.md`, appended entries stamped with time, session, and project. Shared across every project you work in.
+  </Card>
+</CardGroup>
+
+Projects key on the git root, so every subdirectory of a repo resolves to the same project. Retention is calendar-day based: shards past their active window (default 14 days for the mirror, 7 for the journal) move to `archive/` and stay queryable forever.
+
+## The CLI
+
+Run `parsica-weave help` for the full list. The verbs the dispatcher exposes:
+
+| Verb | What it does |
+|------|--------------|
+| `doctor` | Self-check the install and its trust guarantees, including `.lock` sidecar health. |
+| `query` | Retrieve from the enriched chat mirror. Filter by `--grep`, `--file`, `--cmd`, `--tool`, `--since`. `--workspace` searches every project; `--archive` folds in rotated shards; `--full` shows the whole chunk plus its overlay and a decision's `did`. |
+| `name` | Show or set the workspace agent name and byline (`--name <name>`, `--byline on\|name-only\|off`, `--reset`). The v1.0 spelling `agent` still dispatches for backward compatibility. |
+| `refusal` | Manage the redaction term list (`--add`, `--remove`, `--project`). Never prints a term - listings show a count and per-term digests keyed to a workspace-local secret. `--add` is idempotent and doubles as a safe "is X on the list?" check. |
+| `human-only` | Manage the never-store term list. Same interface as `refusal`; the stronger of the two fences. |
+| `note` | Write a journal, working-set, or lesson entry through the scrubbed write gateway. Piping through `note` (never hand-editing the files) keeps the safety layer intact. |
+| `promote` | Promote durable memory to Parsica Spirit if installed. `--dry-run` names every item it would promote with an excerpt - reviewing the preview is reviewing what lands. |
+| `channel` / `sync` | Manage workspace-level named channels and catch up other lanes. |
+| `migrate` | Re-home a pre-release per-project silo into the workspace layout, preserving everything and printing a manifest. Leaves the legacy directory in place for you to remove. |
+| `enrich` | Run or inspect the enrichment pipeline directly. |
+| `calibrate` | Calibrate decision retrieval; `query --full` now surfaces the `did` the workflow needs. |
+
+Run any command with `--help` for its options.
+
+## Slash commands
+
+Weave ships four Claude Code slash commands that wrap the identity and policy verbs:
+
+- `/name <name>` - name this workspace's agent (the naming ceremony).
+- `/whoami` - show the agent's name, byline state, and live preview.
+- `/refusal [--add TERM | --remove TERM | --project]` - manage the redaction list.
+- `/human-only [--add TERM | --remove TERM | --project]` - manage the never-store list.
+
+The commands never echo a term back and neither should the agent; entries are addressed by digest or position.
+
+## Configuration
+
+The active config lives at `~/.claude/parsica-weave/config.json`. A rewrite of a file that fails to parse is refused loudly - a config typo can no longer wipe your refusal or human-only lists. See the [config example](/config) for every key.
+
+Defaults you may want to tune:
+
+| Key | Default | What it controls |
+|-----|---------|------------------|
+| `agent_name` | `""` | The workspace agent's display name. Empty = unnamed. |
+| `byline` | `true` | Whether the agent opens replies with a byline. Also accepts `"name-only"`. |
+| `byline_session_tag` | `true` | Include the short session tag in the byline (`[Name · <session>]`). |
+| `mirror_active_days` | `14` | Calendar days a mirror shard stays outside `archive/`. |
+| `journal_active_days` | `7` | Calendar days a journal page stays outside `archive/`. |
+| `checkpoint_every_n` | `20` | Turns between checkpoint prompts. |
+| `heartbeat_every_n` | `30` | Turns between the durable-recall heartbeat. |
+| `scrub_pii` | `true` | Run the PII scrub in addition to the credential scrub. |
+| `max_inject_bytes` | `12000` | Ceiling on the session-start injection payload. |
+| `mirror_index_chunks` | `25` | Recent turns listed in the session-start mirror index. |
+| `promote_reminder` | `true` | Prompt when durable content is worth promoting to Spirit. |
+| `refusal` | `[]` | Redaction terms (managed via `refusal`, not hand-edited). |
+| `human_only_terms` | `[]` | Never-store terms (managed via `human-only`, not hand-edited). |
+| `pairing_enabled` | `true` | Enrichment pairing between chunks. |
+| `snapback_tools` | `["Task", "Agent"]` | Tools that trigger a snapback re-injection. |
+| `native_memory_import` | `true` | Import `CLAUDE.md` / `MEMORY.md` into the durable pool (requires Parsica Spirit). |
+
+## Session controls
+
+Two environment variables shape a session without touching the install:
+
+- `PARSICA_WEAVE=off` - disable capture and rehydration for this session. Nothing writes, nothing injects.
+- `PARSICA_ISOLATED=1` - run a zero-footprint session. Full recall stays available; no durable writes leave the session.
+
+Turn cadence, checkpoints, and heartbeat all apply per session.
+
+## Safety fences
+
+- **Scrub before store** - the write gateway runs the credential scrub (and, when `scrub_pii` is on, the PII scrub) at the single seam every writer crosses. There is no code path that writes durable content without passing through it.
+- **`[[human-only]]` fence** - anything inside a `[[human-only]]` block is treated as do-not-index and never written to the store.
+- **Refusal list** - listed terms are redacted from everything that reaches the store or any output surface (query display, plan headers, session injects, digests).
+- **Human-only list** - listed terms mean the matching content is never written to the store at all. Stronger than refusal.
+- **Torn-write isolation** - a mirror append that dies mid-line no longer poisons the next record; the fragment stays lost to its own fault and the new record survives.
+- **Working set preservation** - replacing a working set with empty or whitespace content is refused, and every replace leaves the previous version beside it as `.prev`.
+- **Containment on every platform** - the append gateway refuses redirects by its own containment clause on macOS, Linux, and Windows (including directory junctions on NTFS).
+- **Retention rotates, never deletes** - aged shards move to `archive/`; no code path in Weave unlinks user data.
+
+<Warning>
+Never hand-edit the working set, `lessons.md`, or the journal directly - always pipe through
+`parsica-weave note --kind <working|lesson|journal>`. Hand-editing bypasses the scrub and
+can write a pasted secret straight to disk.
+</Warning>
+
+## Native memory (with Parsica Spirit)
+
+Install [Parsica Spirit](https://github.com/Antaris-Analytics-LLC/parsica-spirit) to add a durable memory pool underneath Weave. When it is present:
+
+- Session start mirrors the agent's own memory files (`CLAUDE.md`, `CLAUDE.local.md`, user-level `CLAUDE.md`, auto-memory `MEMORY.md` and its topics) into the durable pool.
+- The import is read-only on the sources, idempotent, and isolation-skipped; it joins an existing pool only.
+- Imported sections rank at the native permanence class - boosted but beatable, with a fixed weight pinned by test.
+- Hits identify themselves at retrieval as `claude-native/<scope>` with a heading trail.
+- Duplicates collapse at display time: exact copies always, near-duplicates only when they do not differ by a negation or a number. A contradiction is never hidden.
+
+Set `native_memory_import: false` in `config.json` to turn it off.
+
+## Autonomous enrichment
+
+At each memory checkpoint, Weave spawns a background enrichment swarm instead of asking the agent to hand-author overlays. The swarm scans the pending chunks, fans out one cheap worker per chunk, and applies the resulting overlays (topic, summary, keywords, search queries, atomic facts, decisions) through the same scrubbed write gateway that captures use.
+
+Workers run on a small, fast model on purpose: terse phrasing keeps recall sharp as the store grows. See [Autonomous Enrichment](/AUTONOMOUS_ENRICHMENT) for the full workflow and the components (`enrich_prep.py`, `enrich_apply.py`, `enrich-swarm.workflow.js`).
+
+The enrichment inbox is swept for staged-but-unapplied overlays on every run, so a killed apply step no longer strands paid-for model work.
+
+## Repository layout
+
+```text
+parsica-weave/
+├── bin/                    # CLI shims (POSIX + Windows) and the python dispatcher
+├── commands/               # Slash commands: /name, /whoami, /refusal, /human-only
+├── hooks/                  # Hook launcher + hooks.json (Stop, SessionStart, PreCompact, ...)
+├── scripts/                # store, query, pcx, doctor, enrich*, calibrate, scrub, tests
+├── skills/weave/SKILL.md   # The working reference for the agent
+├── .claude-plugin/         # plugin.json + marketplace.json
+├── config.example.json     # Every config key with its default
+├── CHANGELOG.md            # Semantic-versioned release notes
+├── SECURITY.md             # Security policy and data-handling posture
+├── ONBOARDING.md           # First-session guide for the agent
+└── TO_THE_NEXT_AGENT.md    # Munin's release-night handoff
+```
+
+## Learn more
+
+- [Onboarding](/Omboarding) - your first sessions with Weave, written by the first agent who lived on it.
+- [Agent-Handoff](/Agent-Handoff) - Munin's release-night notes.
+- [Config](/config) - the full `config.json` example.
+- [Changelog](/changelog) - semantic-versioned release notes.
+- [License](/LICENCE) - Apache License 2.0.
+- [Bug reports](/bugreport) and [Feature requests](/FeatureRequests) - how to file issues.
