@@ -1,5 +1,6 @@
 ---
-title: "changelog"
+title: "Parsica Weave changelog"
+description: "Release notes for Parsica Weave by Antaris Analytics: fixes, new verbs, and updates to workspace continuity for Claude Code from parsica.ai."
 mode: "assistant"
 tag: "CHANGES"
 ---
@@ -10,12 +11,12 @@ All notable changes to Parsica Weave are documented in this file. This project f
 
 ### Fixed
 
-- **A journal or lessons entry no longer duplicates itself in durable memory.** Appended entries carried no heading of their own, so the durable tier treated an entire journal page as a single section keyed on a hash of its body. Every later append re-hashed that growing block into a new record that also contained every earlier entry, while the previous record stayed live and could outrank the current one at retrieval - one lessons slot was measured holding three records of 1,801, 4,537 and 6,713 characters. Each appended entry now gets its own dated heading, so its identity depends on its own text alone; lessons stop collecting in a single undated slot, and the compaction boundary marker goes through the same path.
-- Restored `LICENSE` and `README.md` to the repository root; a prior documentation-site conversion had removed them.
+- **A journal or lessons entry no longer duplicates itself in durable memory.** Appended entries carried no heading of their own, so the durable tier treated an entire journal page as a single section keyed on a hash of its body. Every later append re-hashed that growing block into a new record that also contained every earlier entry, while the previous record stayed live and could outrank the current one at retrieval. One lessons slot was measured holding three records of 1,801, 4,537 and 6,713 characters. Each appended entry now gets its own dated heading, so its identity depends on its own text alone. Lessons stop collecting in a single undated slot, and the compaction boundary marker goes through the same path.
+- Restored `LICENSE` and `README.md` to the repository root after a prior documentation-site conversion had removed them.
 
 ### Upgrading
 
-Nothing to migrate and nothing is lost. An append by the fixed writer leaves every existing entry's identity unchanged, so pages written before this release keep their durable records and simply stop growing. Records that already duplicated remain as they are - this release stops new duplication rather than repairing old, and the repair is a separate reversible operation.
+Nothing to migrate and nothing is lost. An append by the fixed writer leaves every existing entry's identity unchanged, so pages written before this release keep their durable records and simply stop growing. Records that already duplicated remain as they are. This release stops new duplication rather than repairing old, and the repair is a separate reversible operation.
 
 ## \[1.0.1\] - 2026-07-30
 
