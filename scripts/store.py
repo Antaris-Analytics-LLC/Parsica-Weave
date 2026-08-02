@@ -509,6 +509,35 @@ def entry_stamp(sess, project_key):
     return f"*({ts} · session {sess8} · {project_key})*"
 
 
+def doc_entry_block(body, sess, project_key):
+    """The COMPLETE text of ONE entry appended to a shared doc: its own H2 heading, the body, then
+    the provenance stamp. The single shaper for every such append.
+
+    WHY THE HEADING IS LOAD-BEARING, not decoration. The durable tier splits a doc into sections by
+    markdown heading and keys each section's record on a hash of THAT SECTION's body. A journal page
+    carries no headings at all, so every entry on it used to land in one section: each append
+    re-hashed the whole growing blob, minted a fresh id, and stored a NEW durable record holding
+    every earlier entry too - while the previous record stayed live, because the update path needs
+    an existing key to update. Measured before this fix, on the live store: one lesson slot held
+    three records of 1801 / 4537 / 6713 chars, each ending in a later stamp - snapshots of one
+    accumulating section, not versions of an edit. Per-entry headings make an entry's id depend on
+    its own body alone, so it stays stable while later entries land beside it.
+
+    The heading LEADS WITH THE DATE because the durable side reads an entry's date off its heading;
+    without one every lesson landed in a single `undated` slot and collided there.
+
+    Heading and stamp share ONE clock reading deliberately: two gmtime() calls can straddle a minute
+    boundary and label a single entry with two different times.
+
+    Identical headings are safe - the durable side disambiguates repeats of a heading by occurrence -
+    so two entries written in the same minute by the same session do not collide.
+    """
+    sess8 = (str(sess or "").strip() or "-")[:8]
+    ts = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    stamp = f"*({ts} · session {sess8} · {project_key})*"
+    return f"\n## {ts} · {sess8}\n\n{str(body).rstrip()}\n{stamp}\n"
+
+
 # --------------------------------------------------------------------------
 # local-time DISPLAY helpers - render-side ONLY. Storage stays UTC forever (chunk ts,
 # provenance stamps, pool labels); every human-facing surface (pcx injects, query output)
