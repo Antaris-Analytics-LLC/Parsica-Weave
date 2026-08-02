@@ -3,6 +3,20 @@
 All notable changes to Parsica Weave are documented in this file.
 This project follows [Semantic Versioning](https://semver.org).
 
+## [1.0.3] - 2026-08-02
+
+### Changed
+
+- **Removed 1.3 MB of documentation-site files from the package.** A documentation-site
+  integration had committed its own page set and images to the repository root, and every
+  one of them was downloaded on install: twelve files totalling roughly 1,304 KB, of which
+  a single image accounted for 1,003 KB. None of it was read by the plugin. The
+  documentation those pages duplicated already lives in `README.md`, and the files remain
+  in the repository history for anyone who wants them.
+
+No code changed in this release. If you are on 1.0.2 the behaviour is identical; upgrading
+only makes the install smaller.
+
 ## [1.0.2] - 2026-08-02
 
 ### Fixed

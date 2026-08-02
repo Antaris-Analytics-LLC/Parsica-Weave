@@ -1,7 +1,7 @@
 {
   "name": "parsica-weave",
   "displayName": "Parsica Weave",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Workspace continuity for Claude Code. One continuous agent across every project and session: scrubbed local chat mirror, working sets, journal, lessons, and retrieval-first recall.",
   "author": {
     "name": "Antaris Analytics"
