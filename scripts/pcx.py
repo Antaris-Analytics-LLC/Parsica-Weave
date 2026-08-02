@@ -1330,11 +1330,13 @@ def handle_precompact(data):
     except Exception:
         pass
     try:
-        # boundary marker on the WORKSPACE journal page, provenance-stamped (law #2)
+        # boundary marker on the WORKSPACE journal page, provenance-stamped (law #2). Routed
+        # through the same entry shaper as a real note: an unheaded marker joins whatever section
+        # precedes it, which re-hashes that section and forks its durable record on every compaction.
         sess = str(data.get("session_id") or "")[:8]
         f = store.journal_dir() / f"{_now_utc().date().isoformat()}.md"
-        stamp = store.entry_stamp(sess, store.project_key(cwd))
-        store.append_doc(f, f"\n<!-- compaction boundary; mirror + working set preserved -->\n{stamp}\n", cfg)
+        marker = "<!-- compaction boundary; mirror + working set preserved -->"
+        store.append_doc(f, store.doc_entry_block(marker, sess, store.project_key(cwd)), cfg)
     except Exception:
         pass
     _emit({"systemMessage": "[parsica-weave] Compaction - mirror, working set & journal preserved; reload on the other side.",
@@ -1474,15 +1476,20 @@ def handle_note(argv):
     # writes go through the store gateway, which scrubs (secrets / PII / refusal) before disk -
     # this handler holds no raw write of its own (the gateway is the sole path to the store).
     forced = bool(getattr(args, "human_only", False))
-    stamp = store.entry_stamp(args.sess, store.project_key(args.cwd))
+    # Every appended entry is shaped by ONE minter: heading + body + stamp. The heading is what
+    # keeps the entry its own durable section - without it, appends accumulate into a single blob
+    # whose id changes on every write, forking a new durable record that also carries every earlier
+    # entry. The call stays INLINE at each sink so the guarantee is readable (and checkable) at the
+    # call site rather than hidden behind a local.
+    sess, pkey = args.sess, store.project_key(args.cwd)
     if args.kind == "working":
         r = store.write_doc(store.working_path(args.cwd), raw, cfg, forced=forced)   # living doc: replace in full
     elif args.kind == "lesson":
-        r = store.append_doc(store.lessons_path(), "\n" + raw.rstrip() + "\n" + stamp + "\n",
+        r = store.append_doc(store.lessons_path(), store.doc_entry_block(raw, sess, pkey),
                              cfg, forced=forced)
     else:  # journal
         jf = store.journal_dir() / f"{_now_utc().date().isoformat()}.md"
-        r = store.append_doc(jf, "\n" + raw.rstrip() + "\n" + stamp + "\n", cfg, forced=forced)
+        r = store.append_doc(jf, store.doc_entry_block(raw, sess, pkey), cfg, forced=forced)
     # the gateway also refuses content carrying an inline [[human-only]] marker even without the
     # flag; report either way so the caller knows whether it actually landed.
     blocked = isinstance(r, dict) and r.get("stored") is False
@@ -2374,6 +2381,9 @@ def _migrate_lessons(silo, key, cfg):
             else "\n%s\n*(migrated · %s)*\n" % (p, key)
             for p in parts
         )
+        # doc-sections-ok: `parts` is split on `^(?=## )`, so every appended part keeps the source
+        # file's OWN heading - this is a structure-preserving bulk import, not an entry mint, and
+        # routing it through doc_entry_block would bury real headings under a synthetic one.
         r = store.append_doc(store.lessons_path(), stamped, cfg)
         if _blocked(r):
             # POLICY, not failure. The fence will refuse this file identically on every future

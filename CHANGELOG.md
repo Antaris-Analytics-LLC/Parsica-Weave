@@ -3,6 +3,34 @@
 All notable changes to Parsica Weave are documented in this file.
 This project follows [Semantic Versioning](https://semver.org).
 
+## [1.0.2] - 2026-08-02
+
+### Fixed
+
+- **A journal or lessons entry no longer duplicates itself in durable memory.** An
+  appended entry carried no heading of its own, so the durable tier - which splits a
+  document into sections by heading and keys each section on a hash of its body - saw an
+  entire journal page as one section, and saw a lesson appended without a heading as part
+  of whatever section preceded it. Every later append re-hashed that growing block into a
+  new identity, storing a *new* durable record that also contained every earlier entry,
+  while the previous record stayed live and could outrank the current one at retrieval.
+  Measured on a real store before the fix: one lessons slot held three records of 1801,
+  4537 and 6713 characters - snapshots of one accumulating block, not versions of an edit.
+  Each appended entry now gets its own dated heading, so its identity depends on its own
+  text alone and stays put while later entries land beside it. Lessons also stop collecting
+  in a single undated slot, because the heading carries the date. The compaction boundary
+  marker goes through the same path, for the same reason.
+- Restored `LICENSE` and `README.md`, which a documentation-site conversion had removed
+  from the repository root.
+
+### Upgrading
+
+Nothing to migrate and nothing is lost. Verified against a real page: an append by the
+fixed writer leaves every existing entry's identity unchanged, so pages written before
+this release keep their durable records and simply stop growing. Records that already
+duplicated remain as they are - this release stops new duplication rather than repairing
+old, and the repair is a separate reversible operation.
+
 ## [1.0.1] - 2026-07-30
 
 Every fix below shipped with tests proving both directions - the failure refused and the
