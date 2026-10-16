@@ -3110,11 +3110,25 @@ def import_metadata_json(src, dst, key, dataset, cfg, *, root, note=None):
 MIGRATION_RECEIPT_VERSION = 1
 
 
-def name_fingerprint(name):
+def name_fingerprint(name, key=None):
     """Opaque, stable digest of an UNTRUSTED legacy NAME - the shape merge_channels' chan-key
     quarantine established: report a fingerprint, never the raw value. Distinct names keep distinct
-    fingerprints, so an audit can still tell two skipped files apart without either one's bytes."""
-    return hashlib.sha1(str(name).encode("utf-8", "replace")).hexdigest()[:12]
+    fingerprints, so an audit can still tell two skipped files apart without either one's bytes.
+
+    Keyed under the workspace's policy digest key when one exists (the same reasoning as
+    term_digest: a file can be NAMED for a credential, and a bare hash of a short name falls to a
+    wordlist, so a receipt carrying bare fingerprints would be very nearly a receipt carrying the
+    names). `key` is the workspace key to bind under; None reads the workspace's existing key and
+    never mints one (minting is a durable write, left to write paths such as migrate, which mint
+    with create=True and pass the key in). With no key at all - isolation, or a store that has
+    never needed one - the fallback is an unkeyed SHA-256, which still keeps distinct names
+    distinct and is never the broken SHA-1."""
+    norm = str(name).encode("utf-8", "replace")
+    if key is None:
+        key = policy_digest_key(create=False)
+    if key:
+        return hmac.new(key.encode("ascii"), norm, hashlib.sha256).hexdigest()[:12]
+    return hashlib.sha256(norm).hexdigest()[:12]
 
 
 def write_migration_receipt(silo, key, summary, cfg=None):

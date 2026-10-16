@@ -24,9 +24,13 @@ def run():
     os.environ["PARSICA_WEAVE_ROOT"] = tmp
     import store
     import pcx
+    import scrub
     fails = []
 
     def ck(c, m):
+        # Several checks build credential-SHAPED fixtures; a failure line must never echo one, so
+        # every message is scrubbed before it reaches stdout or the failure summary.
+        m, _ = scrub.scrub(m)
         print(("ok   " if c else "FAIL ") + m)
         if not c:
             fails.append(m)
@@ -117,7 +121,8 @@ def run():
     safe = pcx._safe_name(cfg_padded_secret["agent_name"])
     ck(safe.startswith("sk-ant-") and len(safe) >= 20 + len("sk-ant-"),
        "_safe_name collapses invisible padding BEFORE capping, so the full secret survives "
-       "the 48-char cap intact for scrub.scrub() to catch: got %r" % safe)
+       "the 48-char cap intact for scrub.scrub() to catch: prefix ok=%s, len=%d"
+       % (safe.startswith("sk-ant-"), len(safe)))
     hdr_padded_secret = pcx._identity_header(cfg_padded_secret, sess="ab12cd34")
     ck("sk-ant-" not in hdr_padded_secret and key_body[:18] not in hdr_padded_secret,
        "an invisible-padded secret-shaped agent_name is fully scrubbed out of the header - no "

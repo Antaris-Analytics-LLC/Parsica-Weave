@@ -16,6 +16,7 @@ Junctions need no privilege on Windows and are the load-bearing case: a junction
 is_symlink() False and is traversed by rglob/os.walk. Real symlinks need admin/Developer Mode, so
 they skip explicitly rather than passing vacuously.
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -243,8 +244,14 @@ def test_the_receipt_still_records_what_happened(tmp_path):
     mirror_row = rec.get("datasets", {}).get("mirror", {})
     assert mirror_row.get("skipped") == 1, "the COUNT must survive: %r" % mirror_row
     fps = mirror_row.get("skipped_fingerprints") or []
-    assert len(fps) == 1 and fps[0] == store.name_fingerprint(SECRET + ".txt"), (
+    # The fingerprint is keyed under the migrated workspace's policy digest key, which migrate
+    # minted in `root` (a write path), so recompute it under THAT key, not this process's store.
+    fp_key = json.loads((root / "workspace.json").read_text(encoding="utf-8")).get("policy_digest_key")
+    assert fp_key, "migrate mints the workspace key its fingerprints are bound under"
+    assert len(fps) == 1 and fps[0] == store.name_fingerprint(SECRET + ".txt", key=fp_key), (
         "a fingerprint must still identify WHICH file was skipped: %r" % mirror_row)
+    assert fps[0] != hashlib.sha256((SECRET + ".txt").encode("utf-8")).hexdigest()[:12], (
+        "a receipt fingerprint is keyed, never a bare hash of the name")
 
 
 # ------------------------------------------------- RC5L-C: containment BEFORE the read
