@@ -2774,8 +2774,11 @@ def handle_migrate(argv):
                 # (write_migration_receipt) also deep-scrubs every string it is handed; this is the
                 # producer simply not handing it a secret to begin with.
                 summary[sub]["skipped"] = len(leftover)
+                # migrate is a durable write path, so it may mint the workspace key the
+                # fingerprints are bound under; "" under isolation, where the unkeyed fallback runs.
+                fp_key = store.policy_digest_key(create=True)
                 summary[sub]["skipped_fingerprints"] = sorted(
-                    store.name_fingerprint(p.name) for p in leftover)
+                    store.name_fingerprint(p.name, key=fp_key) for p in leftover)
         for name in (".state.json", "config.json"):
             f = silo / name
             # lexists, not is_file(): is_file() FOLLOWS a link and reports True for its target, so

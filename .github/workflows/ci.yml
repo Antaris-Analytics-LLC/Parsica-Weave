@@ -11,6 +11,11 @@ on:
   push:
   pull_request:
 
+# The gate only checks out and runs tests, so the job token needs nothing but read access to the
+# repository. Without this block the token inherits the repository default, which can be read-write.
+permissions:
+  contents: read
+
 jobs:
   test-gate:
     strategy:
