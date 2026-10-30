@@ -214,11 +214,13 @@ def test_state_lock_refuses_a_parent_swapped_between_proof_and_open(
         return real_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(store.os, "open", attack)
-    # Pre-fix, the reopen goes through the redirected parent and the lock is acquired on the
-    # external file (got is True); the parent recheck refuses it, so _state_lock's fail-open
-    # path yields False instead.
-    with store._state_lock(state, timeout=0.01) as got:
-        assert got is False
+    # Pre-fix, the reopen went through the redirected parent and the lock was acquired on the
+    # external file (got was True); the parent recheck refuses it. Until October 2026 that refusal
+    # degraded to an unlocked yield (got False); the lock now fails closed (StateLockError) and the
+    # body never runs.
+    with pytest.raises(store.StateLockError):
+        with store._state_lock(state, timeout=0.01):
+            pass
     assert swapped, "the attack never got a chance to fire"
 
 

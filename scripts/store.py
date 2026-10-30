@@ -292,10 +292,11 @@ def project_key(cwd):
         _refusal_union_cached()                   # refresh the memo (and its canonical forms)
         fence_canon = _refusal_union_memo.get("canon") or ()
     except OSError:
-        # The refusal configs could not be read, so we cannot prove what is fenced. Fail CLOSED to
-        # the neutral name rather than raise (which would break key computation for every command)
-        # or trust a possibly-stale memo. Over-redaction here costs only the readable slug; the hash
-        # below keeps the key unique.
+        # The refusal configs could not be ENUMERATED, so we cannot prove what is fenced. Fail CLOSED
+        # to the neutral name rather than trust a possibly-stale memo. Over-redaction here costs only
+        # the readable slug; the hash below keeps the key unique. A config that is PRESENT but
+        # unreadable is different: _load_json raises StoreReadError, which propagates from here on
+        # purpose - every command stops until the file is repaired (October 2026, class (a)).
         fence_canon = None
     _canon_name = _canon_label(safe_name)
     if fence_canon is None or any(c in _canon_name for c in fence_canon):
@@ -577,17 +578,36 @@ def local_zone_note():
     return "local time"
 
 
+class StoreReadError(RuntimeError):
+    """A store document that EXISTS cannot be read or parsed. The store fails CLOSED on it: an
+    unreadable config.json is not an empty config (an empty config has no refusal terms and no
+    human-only terms), an unreadable channels.json is not an empty registry, and an unreadable
+    workspace.json is not a workspace with no id. Callers stop; the hook layer records the
+    category (audit_line) and writes nothing. Until October 2026 every such file silently became
+    its default (REVIEW-2026-10.md, pile one, class (a), store.py 580-590)."""
+
+
 def _load_json(p, default):
     # Routed through _read_json_no_follow (lstat proof + O_NOFOLLOW open + fstat identity compare)
     # rather than a bare read_text: a symlinked config.json/channels.json/.state.json was FOLLOWED
     # and its external target read as if it were store content - an attacker-controlled file could
     # disable the PII/refusal fence or be exfiltrated as "config" (RC5L-H W-G1a systemic finding).
-    # A refusal here degrades to `default`, same as any other unreadable/missing file - fail closed,
-    # never a stale memo or a silently-followed link.
+    # ABSENT is the only case that yields `default`. A file that is PRESENT but refused (a link, a
+    # hardlink, a non-regular object), unreadable (permissions, an open failure) or unparseable
+    # (one stray comma) raises StoreReadError. The message names the file, never its contents.
+    p = Path(p)
+    try:
+        present = os.path.lexists(str(p))
+    except OSError as exc:
+        raise StoreReadError("%s cannot be inspected (%s); nothing is read or written until it is "
+                             "repaired" % (p.name, type(exc).__name__))
+    if not present:
+        return json.loads(json.dumps(default))  # deep copy of default
     try:
         return json.loads(_read_json_no_follow(p, STORE_ROOT))
-    except Exception:
-        return json.loads(json.dumps(default))  # deep copy of default
+    except Exception as exc:
+        raise StoreReadError("%s is present but cannot be read or parsed (%s); nothing is read or "
+                             "written until it is repaired" % (p.name, type(exc).__name__))
 
 
 def _read_config_for_rewrite(path):
@@ -894,6 +914,69 @@ def emit_text(value, *, stream=None, extra=None):
     stream.write(fence_output(str(value), extra=extra) + "\n")
 
 
+# --------------------------------------------------------------------------
+# audit line - the record a hook writes when it cannot do its job, and the record the capture
+# path writes when the fence refuses a turn. Category and small scalar fields only: never
+# content, never a term, never a path from outside the store. Added October 2026
+# (REVIEW-2026-10.md, pile one, class (a)): until then a failed hook and a refused turn left no
+# trace anywhere.
+# --------------------------------------------------------------------------
+AUDIT_FILE = "audit.jsonl"
+
+# One CONSTANT stderr line per category (no interpolation at the write site: the output-sink
+# discipline test is right that an interpolated stderr write is an unfenced sink, and these lines
+# must not depend on reading the refusal union, which is exactly what may have just failed).
+_AUDIT_STDERR = {
+    "hook_error": "parsica-weave: hook_error - a hook failed; nothing was stored or injected for this event (see audit.jsonl in the workspace)\n",
+    "capture_error": "parsica-weave: capture_error - one captured turn could not be built and was skipped (see audit.jsonl in the workspace)\n",
+    "capture_refused": "parsica-weave: capture_refused - the store gateway refused one captured turn (see audit.jsonl in the workspace)\n",
+    "human_only_refused": "parsica-weave: human_only_refused - the human-only fence refused one captured turn before capture (see audit.jsonl in the workspace)\n",
+}
+_AUDIT_STDERR_OTHER = "parsica-weave: audit - a hook recorded a failure or a refusal (see audit.jsonl in the workspace)\n"
+
+
+class HumanOnlyRefused(Exception):
+    """Raised by the capture path when the human-only fence refuses a RAW turn, before any cut or
+    scrub. Carries only what the audit line needs - the chunk id (a digest), the size of the raw
+    text in characters and the shard date - never the text."""
+
+    def __init__(self, chunk_id, size, date):
+        super().__init__("human-only content refused before capture")
+        self.chunk_id = chunk_id
+        self.size = size
+        self.date = date
+
+
+def audit_line(category, **fields):
+    """Append ONE metadata-only JSON line to STORE_ROOT/audit.jsonl and print one constant line to
+    stderr. `category` names what happened (hook_error, capture_error, capture_refused,
+    human_only_refused); `fields` are small scalars (an event name, an exception class name, a
+    chunk id, a size, a date). Strings are capped at 120 characters and nothing here ever carries
+    content. Under isolation the line goes to stderr only (zero footprint). The file append is
+    best effort and never raises: this is the last resort, and a failing last resort must not take
+    the session down with it. Returns the record."""
+    rec = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+           .replace("+00:00", "Z"),
+           "category": str(category)[:40]}
+    for k, v in fields.items():
+        if isinstance(v, str):
+            rec[str(k)[:40]] = v[:120]
+        elif isinstance(v, (int, float, bool)) or v is None:
+            rec[str(k)[:40]] = v
+    try:
+        sys.stderr.write(_AUDIT_STDERR.get(rec["category"], _AUDIT_STDERR_OTHER))
+    except Exception:
+        pass
+    if is_isolated():
+        return rec
+    try:
+        _verified_dir(STORE_ROOT, STORE_ROOT, 0o700)
+        _raw_append(STORE_ROOT / AUDIT_FILE, json.dumps(rec, ensure_ascii=False, allow_nan=False) + "\n")
+    except Exception:
+        pass
+    return rec
+
+
 def ensure_workspace(cwd):
     """Create the workspace tree (idempotent): the shared docs live at the top (lessons.md,
     journal/, working/), capture under mirror/<key>/, machine state under projects/<key>/.
@@ -960,34 +1043,40 @@ def ledger_seen(state, sess_key, chunk_id):
         return False
 
 
+class StateLockError(RuntimeError):
+    """The state lock could not be taken, so the mutation under it did not run. Either the lock
+    sidecar could not be opened as a plain, single-link regular file (a link, a junction, a
+    directory or a FIFO sits at its name) or another process held it past the timeout. Until
+    October 2026 both cases yielded "not locked" and the caller proceeded with an unlocked
+    read-merge-write (REVIEW-2026-10.md, pile one, class (a), store.py 1022-1024)."""
+
+
 @contextlib.contextmanager
 def _state_lock(p, timeout=2.0):
     """Cross-process (and cross-thread) mutex for the .state.json read-merge-write. Locks a
     SIDECAR file (.state.json.lock) - locking the state file itself would collide with the
     tmp.replace on Windows, which cannot replace a file holding an open locked handle.
-    Fail-OPEN on timeout/error: continuity bookkeeping must never wedge a session, so the
-    unlocked path degrades to the old best-effort merge instead of blocking or raising.
+    Fails CLOSED: if the sidecar cannot be opened as a plain regular file, or another process holds
+    the lock past `timeout`, StateLockError is raised at entry and the body never runs, so no
+    read-merge-write ever happens unlocked. The hook layer records the failure (audit_line) and the
+    session continues; the one bookkeeping write is lost, never raced.
 
     The sidecar is opened with the same cross-platform descriptor-authority proof as content
     leaves: exclusive create when absent; otherwise lstat, open without O_CREAT, fstat, and a fresh
     lstat binding the CURRENT lexical name to the descriptor. That rejects hardlinks, non-regular
-    objects, and a file symlink swapped in mid-open. A refusal degrades to the same fail-open
-    unlocked path as any other lock-open failure - never a crash, never a block.
+    objects, and a file symlink swapped in mid-open.
 
     Be precise about WHICH layer rejects a directory JUNCTION here, because it is not this proof:
-    the exclusive create fails EACCES before any descriptor exists, so the OS refuses and the
-    outer handler degrades to unlocked. Nothing is ever written through the redirect - the
-    containment property holds - but it holds because the open failed, not because the proof ran.
+    the exclusive create fails EACCES before any descriptor exists, so the OS refuses. Nothing is
+    ever written through the redirect.
 
-    #122 resolution: the containment property is NOT the problem and never was. Locking stays
-    fail-OPEN by policy - a guard that locks a user out of their own continuity over a false
-    positive is a worse product than one that degrades. What was actually wrong is that a planted
-    junction was INDISTINGUISHABLE from an ordinary timeout, so a store could sit unlocked
-    indefinitely with nothing able to say so. Fixed on the diagnosis axis, not the enforcement
-    axis: `lock_health()` below discovers every lock sidecar under the store root and names the
-    ones that are not regular files, and `doctor` reports them. The except clause here is
-    broadened so the reparse check is genuinely REACHED (see the twin in _safe_append_open) - but
-    that is hygiene, not the fix; both paths still degrade to unlocked, deliberately."""
+    History: until October 2026 this lock failed OPEN by policy. #122 was resolved on the diagnosis
+    axis only (`lock_health()` below names an unlockable sidecar and `doctor` reports it), so a
+    planted redirect or a timeout degraded to an unlocked merge with nothing saying so at the time
+    (REVIEW-2026-10.md, pile one, class (a)). The diagnosis stays; the enforcement is now closed.
+    The except clause below stays broadened so the reparse check is genuinely REACHED (see the
+    twin in _safe_append_open)."""
+    lock_name = Path(str(p) + ".lock").name
     try:
         lock_path = Path(str(p) + ".lock")
         _verified_parent(lock_path, STORE_ROOT, 0o700)
@@ -1019,9 +1108,10 @@ def _state_lock(p, timeout=2.0):
         except BaseException:
             os.close(fd)
             raise
-    except Exception:
-        yield False
-        return
+    except Exception as exc:
+        raise StateLockError("state lock %s could not be opened as a plain regular file (%s); the "
+                             "write under it did not run (doctor's lock_health names the sidecar)"
+                             % (lock_name, type(exc).__name__))
     got = False
     try:
         deadline = time.time() + timeout
@@ -1040,6 +1130,9 @@ def _state_lock(p, timeout=2.0):
                 if time.time() >= deadline:
                     break
                 time.sleep(0.005)
+        if not got:
+            raise StateLockError("state lock %s is held by another process past the %.1fs timeout; "
+                                 "the write under it did not run" % (lock_name, timeout))
         yield got
     finally:
         if got:
@@ -1062,12 +1155,10 @@ def _state_lock(p, timeout=2.0):
 def lock_health(root=None):
     """DISCOVER every lock sidecar under the store root and report the ones that cannot be locked.
 
-    The diagnosis half of #122. `_state_lock` fails OPEN on purpose - continuity bookkeeping must
-    never wedge a session - but that policy has a cost: a lock name occupied by a directory
-    junction, a symlink, a FIFO, or a directory degrades to "unlocked" identically to a two-second
-    contention timeout. One is transient and fine; the other is permanent and means concurrent
-    sessions have silently been racing the state file for as long as it has been there. Nothing in
-    the system could tell them apart, so nothing could report it.
+    The diagnosis half of #122. `_state_lock` now fails CLOSED (StateLockError), so a lock name
+    occupied by a directory junction, a symlink, a FIFO or a directory refuses every write under
+    it; this probe is how the operator learns WHICH sidecar is the problem and why, instead of
+    reading one refusal per hook in audit.jsonl with no cause named.
 
     DISCOVERY, never a hand-list: it walks for `*.lock` rather than checking a fixed set of names,
     so a lock sidecar added by a future call site is covered the day it appears instead of the day

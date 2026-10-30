@@ -61,6 +61,8 @@ def _hardlink(link: Path, target: Path) -> bool:
 def fresh_root(monkeypatch, tmp_path):
     root = tmp_path / "store_root"
     monkeypatch.setattr(store, "STORE_ROOT", root)
+    # GLOBAL_CONFIG moves with the root (a present-but-outside config is refused since October 2026)
+    monkeypatch.setattr(store, "GLOBAL_CONFIG", root / "config.json")
     store._refusal_union_memo.clear()
     store._refusal_union_memo.update({"sig": None, "terms": []})
     return root
@@ -115,7 +117,13 @@ def test_explicit_query_refuses_an_inroot_mirror_parent_alias(fresh_root, tmp_pa
 # --- W-I1a: linked/hardlinked project config must not alter query output -------------------------
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
-def test_query_ignores_a_linked_project_config(fresh_root, tmp_path, monkeypatch, capsys, link_kind):
+def test_query_refuses_a_linked_project_config(fresh_root, tmp_path, monkeypatch, capsys, link_kind):
+    """A linked or hardlinked project config.json is a store document that exists but cannot be
+    trusted. Until October 2026 the loader treated it as ABSENT: the link was not followed, but the
+    project's own fence silently vanished with it and the query ran on defaults. The fail-closed
+    loader (REVIEW-2026-10.md, pile one, class (a), store.py 580-590) refuses the whole read: the
+    link's contents still never alter output, and now nothing is read or shown until the link is
+    removed. (This test asserted the old degrade-to-defaults behavior before October 2026.)"""
     cwd = tmp_path / ("project-cfg-" + link_kind)
     cwd.mkdir()
     store.ensure_workspace(str(cwd))
@@ -135,10 +143,11 @@ def test_query_ignores_a_linked_project_config(fresh_root, tmp_path, monkeypatch
     elif not _hardlink(config, external):
         pytest.skip("hardlinks unavailable here")
     monkeypatch.setattr(sys, "argv", ["query.py", "--project", key, "--grep", "needle", "--full"])
-    query.main()
+    with pytest.raises(store.StoreReadError):
+        query.main()
     out = capsys.readouterr().out
-    assert "needle valid memory" in out
-    assert "redacted" not in out.lower()
+    assert "needle valid memory" not in out, "nothing is shown while a config cannot be trusted"
+    assert "redacted" not in out.lower(), "the link's contents never fence anything"
 
 
 def test_query_ordinary_project_config_refusal_still_applies(fresh_root, tmp_path, monkeypatch, capsys):

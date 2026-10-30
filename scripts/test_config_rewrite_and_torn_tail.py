@@ -76,9 +76,14 @@ def test_policy_list_twin_refuses_on_a_corrupt_file(tmp_path):
     path.parent.mkdir(parents=True, exist_ok=True)
     before = '{"human_only_terms": ["secret-project"], "refusal": ["te'
     path.write_text(before, encoding="utf-8")
-    with pytest.raises(ValueError):
-        store.write_policy_list("refusal", "workspace", ["new-term"], cwd)
-    assert path.read_text(encoding="utf-8") == before, "the refused policy write touched the file"
+    try:
+        with pytest.raises(ValueError):
+            store.write_policy_list("refusal", "workspace", ["new-term"], cwd)
+        assert path.read_text(encoding="utf-8") == before, "the refused policy write touched the file"
+    finally:
+        # this IS the workspace config: since October 2026 a corrupt config fails every later read
+        # closed (StoreReadError), so it must never be left behind for the tests that follow
+        path.unlink()
 
 
 # ----------------------------------------------------------------- torn-tail guard

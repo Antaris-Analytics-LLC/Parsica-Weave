@@ -119,6 +119,7 @@ The store is one workspace at `~/.claude/parsica-weave/`:
   channels.json                      workspace-level channel registry
   projects/<key>/                    machine state: cursors, config, enrichment, calibration
   config.json / workspace.json       global config; the workspace id
+  audit.jsonl                        one line per failed hook or refused turn: category, ids, sizes; never content
 ```
 
 Projects key on the git root, so every subdirectory of a repo resolves to the same
@@ -376,9 +377,13 @@ a full vote; non-finite and negative values are clamped rather than trusted.
 - **Heartbeat + snap-back re-grounding.** On a long session, identity plus a working-set slice
   are re-injected every `heartbeat_every_n` turns; after a heavy sub-agent return the next turn
   re-grounds off-cadence. Both slices are small by design, so context never bloats.
-- **Fail-silent hooks.** A continuity helper never breaks a session. That silence is the
-  passive hook path only: setup (`doctor`) and the explicit verbs (`note`, `promote`) are
-  loud, and exit non-zero on failure.
+- **Hooks never break a session, and never fail silently.** A continuity helper that fails
+  writes one line to `audit.jsonl` in the workspace (a category such as `hook_error`,
+  `capture_error` or `human_only_refused`, the event, an exception class or a chunk id and
+  size; never content) and one constant line to stderr, then exits 0. A config file that is
+  present but unreadable, or a state lock that cannot be taken, stops the hook the same way:
+  nothing is captured or injected until the file is repaired. Setup (`doctor`) and the
+  explicit verbs (`note`, `promote`) are loud, and exit non-zero on failure.
 
 ## Channels (scope sessions into named lanes)
 

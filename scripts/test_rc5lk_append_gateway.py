@@ -41,6 +41,8 @@ def _hardlink(link: Path, target: Path) -> bool:
 def fresh_root(monkeypatch, tmp_path):
     root = tmp_path / "store_root"
     monkeypatch.setattr(store, "STORE_ROOT", root)
+    # GLOBAL_CONFIG moves with the root (a present-but-outside config is refused since October 2026)
+    monkeypatch.setattr(store, "GLOBAL_CONFIG", root / "config.json")
     return root
 
 

@@ -35,6 +35,7 @@ SEED = "# Working set\n\n## Pinned facts\n- the release tag is v1.0, not v1.0.0\
 
 def _doc(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "STORE_ROOT", tmp_path)
+    monkeypatch.setattr(store, "GLOBAL_CONFIG", tmp_path / "config.json")   # moves with the root
     p = tmp_path / "working.md"
     p.write_text(SEED, encoding="utf-8")
     return p
@@ -94,6 +95,7 @@ def test_content_that_is_only_whitespace_padded_still_writes(tmp_path, monkeypat
 def test_writing_a_doc_that_does_not_exist_yet_works(tmp_path, monkeypatch):
     """First write of a fresh workspace: nothing to back up, nothing to refuse."""
     monkeypatch.setattr(store, "STORE_ROOT", tmp_path)
+    monkeypatch.setattr(store, "GLOBAL_CONFIG", tmp_path / "config.json")   # moves with the root
     p = tmp_path / "fresh.md"
     assert store.write_doc(p, "first", {}) is None
     assert p.read_text(encoding="utf-8").strip() == "first"
