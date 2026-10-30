@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """human-only fence - integration tests at the Weave write gateway.
 
-Sentinel-only (the fail-CLOSED floor): parsica_spirit is NOT on this path, so these prove the
-interlock holds on a pure-Weave box with no external classifier installed. Term-based
-classification via the optional external classifier (PARSICA_HUMAN_ONLY_CLASSIFIER) is out of
-scope for these sentinel-floor tests.
+The two open-code floors, the [[human-only]] sentinel and the configured human_only_terms, are
+the whole policy: parsica_spirit is NOT on this path and nothing is loaded from the environment
+(the import path named by an environment variable was removed in October 2026; see
+test_no_environment_loaded_code.py for the proof that the variable now has no effect).
 """
 import json
 import os
@@ -132,10 +132,9 @@ def test_enrich_still_enriches_clean_chunk():
 
 
 def test_configured_term_blocks_without_any_classifier():
-    # the PUBLIC promise: a configured `human_only_terms` entry blocks even with NO external
-    # classifier installed (the open-code substring floor), not only the [[human-only]] sentinel.
+    # the PUBLIC promise: a configured `human_only_terms` entry blocks on its own (the open-code
+    # substring floor), not only the [[human-only]] sentinel. Nothing outside this tree is consulted.
     _fresh()
-    assert not os.environ.get("PARSICA_HUMAN_ONLY_CLASSIFIER"), "this test asserts the no-classifier floor"
     cfg = dict(store.DEFAULT_CONFIG)
     cfg["human_only_terms"] = ["Nimbus", "codeword"]
     assert store.is_human_only_text("discussing the Nimbus rollout", cfg) is True
