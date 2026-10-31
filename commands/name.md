@@ -3,10 +3,14 @@ description: Name this workspace's agent (the naming ceremony)
 argument-hint: <name>
 ---
 
-Name this workspace's agent. Run the identity verb with the user's chosen name:
+Name this workspace's agent. Run exactly this, with the user's chosen name as the body of the
+heredoc. The quoted delimiter means the shell passes the name through untouched, so a quote, a
+backslash or a dollar sign in it is data to the verb and never shell:
 
 ```
-python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" name --name "$ARGUMENTS"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" name --name-stdin <<'PARSICA_NAME'
+$ARGUMENTS
+PARSICA_NAME
 ```
 
 Relay the warm readback to the user, including the byline preview - it shows exactly
