@@ -660,11 +660,13 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
         # nothing yet on disk. Per-window (per-PID) shard so concurrent windows append to
         # DIFFERENT files (a shared day-file append is a silent lost write on Windows).
         # _build_chunk runs the human-only fence on the RAW turn first, then scrubs every value
-        # BEFORE truncating, so the append passes content_fields_scrubbed (no redundant second
-        # scrub); the gateway's own human_only check and the reserved-key metadata validation still
-        # run there. Every refusal and every failure below is RECORDED (store.audit_line): until
-        # October 2026 the gateway's receipt was discarded and any error was a bare continue
-        # (REVIEW-2026-10.md, pile one, class (a), pcx.py 661-667).
+        # BEFORE truncating, so a secret cannot survive the cut; the gateway then scrubs the
+        # finished chunk again, as it scrubs every record (the one door has had no bypass since
+        # October 2026; REVIEW-2026-10.md, follow-up, class (a)), and runs its own human_only
+        # check and the reserved-key metadata validation. Every refusal and every failure below
+        # is RECORDED (store.audit_line): until October 2026 the gateway's receipt was discarded
+        # and any error was a bare continue (REVIEW-2026-10.md, pile one, class (a), pcx.py
+        # 661-667).
         for turn in _chunk_turns(flush_records):
             try:
                 head = turn["prompt"] or (turn["recs"][0] if turn["recs"] else {})
@@ -680,7 +682,7 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
                 if ccid and ccid in dseen:
                     continue
                 shard = md / f"{date}.{os.getpid()}.jsonl"
-                result = store.append_record(shard, chunk, cfg, content_fields_scrubbed=True)
+                result = store.append_record(shard, chunk, cfg)
                 if isinstance(result, dict) and result.get("stored") is False:
                     # the gateway refused the finished chunk: recorded, never discarded
                     store.audit_line("capture_refused", event="mirror",
@@ -2210,8 +2212,13 @@ def handle_sync(argv):
     """Deliberate catch-up (the sync verb): print a compact digest of the last N hours across
     the WHOLE workspace mirror (every project), own-channel chunks excluded - a lane spans
     projects, so the digest does too. Rows are labeled [<project-key> · <channel-or-sess>]:
-    channel name when tagged, session id otherwise. Read-only - nothing is written; the
-    mirror is already scrubbed at capture, so the digest inherits that."""
+    channel name when tagged, session id otherwise. Read-only - nothing is written.
+
+    Every gist shown is scrubbed HERE, before the cut, with PII ON and the workspace-wide refusal
+    union, whatever the source project's own scrub_pii setting was: a project may opt out of PII
+    scrubbing for its own store, and until October 2026 this digest showed that project's raw PII
+    to every other project through a sink that applied only the refusal fence (REVIEW-2026-10.md,
+    follow-up, class (a), RF 9)."""
     import argparse
     from datetime import datetime, timedelta, timezone
     ap = argparse.ArgumentParser(prog="pcx.py sync")
@@ -2242,11 +2249,15 @@ def handle_sync(argv):
     names = {cid: ((m.get("name") or cid) if isinstance(m, dict) else cid)
              for cid, m in reg["channels"].items()}
     lines = []
+    union = store.workspace_refusal_terms()
     for key, c in rows:
         t = store.local_stamp(c.get("ts"))   # display is LOCAL; the stored ts stays UTC
         ch = c.get("chan") or ""
         label = names.get(ch, ch) if ch else (str(c.get("sess") or "") or "untagged")
-        gist = (c.get("user") or c.get("asst") or "")[:160].replace("\n", " ")
+        # scrub the WHOLE stored text with PII on, then cut: a secret or an address cannot
+        # survive at the cut, and the source project's scrub_pii opt-out does not reach here
+        clean, _ = scrub.scrub(str(c.get("user") or c.get("asst") or ""), scrub_pii=True, refusal=union)
+        gist = clean[:160].replace("\n", " ")
         lines.append(f"- {t} [{key} · {label}] {gist}")
     hdr = (f"[parsica-weave] sync: last {args.hours:g}h across the workspace - "
            f"{len(rows)} chunk(s), {store.local_zone_note()}"

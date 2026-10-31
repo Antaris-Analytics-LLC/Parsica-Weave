@@ -1646,24 +1646,6 @@ def _scrub_record(obj, cfg):
     return _walk(obj)
 
 
-def _validate_metadata(record, cfg):
-    """Reserved-key safety for the fast path. When a caller has ALREADY scrubbed every free-text
-    CONTENT field (the mirror path scrubs in _build_chunk before truncating), re-walking the content is
-    wasted work - but the reserved METADATA keys must still be validated, because a hostile transcript
-    can smuggle a secret into ts/sess/chan and the content scrub never touches those keys. Validate each
-    reserved scalar (scrub any that is not genuine metadata) and leave the already-clean content alone.
-    This keeps the 'spare only validated metadata' invariant on BOTH append paths, so no fast-path
-    caller can reintroduce the reserved-key bypass."""
-    if not isinstance(record, dict):
-        return record
-    out = dict(record)
-    wterms = workspace_refusal_terms()   # reserved identifiers fence the whole workspace; compute once
-    for k, v in record.items():
-        if k in _RESERVED_RECORD_KEYS and not isinstance(v, (dict, list)):
-            out[k] = _clean_reserved_scalar(k, v, cfg, wterms)
-    return out
-
-
 def _raw_append(path, text):
     """SOLE raw append to disk. Private - the gateway is its only caller. A NEW file lands
     owner-only (0600) from its first byte, under an owner-only (0700), verified-child parent;
@@ -1840,19 +1822,20 @@ def is_human_only_record(record, cfg, forced=False):
     return _term_hit(blob, terms)
 
 
-def append_record(path, record, cfg, forced=False, content_fields_scrubbed=False):
+def append_record(path, record, cfg, forced=False):
     """Scrub a record's values, serialize to one JSON line, append. The ONLY way a JSON record
     enters the store (mirror chunks, enrichment overlay, calibration ledger). allow_nan=False: a
     NaN/Inf can never land as invalid JSON - the caller's guard sees the raise instead.
     human_only (do-not-index fence) is evaluated FIRST, before scrub: a matching record is refused with a
-    receipt and produces zero disk artifacts. content_fields_scrubbed=True skips the redundant re-scrub of
-    the free-text CONTENT fields when the caller has ALREADY scrubbed every one (the mirror path scrubs in
-    _build_chunk BEFORE truncating) - the human_only fence, the reserved-key metadata validation, and the
-    single write still run, so the one door holds and no secret rides a metadata key onto disk.
-    Returns the cleaned record when stored."""
+    receipt and produces zero disk artifacts. Every record is scrubbed here, whatever the caller did
+    first: until October 2026 a content_fields_scrubbed flag let a caller that said it had already
+    scrubbed skip the content scrub and keep only the reserved-key validation (REVIEW-2026-10.md,
+    follow-up, class (a), RF 10). The one door has no bypass; a second pass over clean text is a no-op,
+    and the reserved-key metadata validation is part of the same walk. Returns the cleaned record when
+    stored."""
     if is_human_only_record(record, cfg, forced=forced):
         return dict(_HUMAN_ONLY_RECEIPT)
-    rec = _validate_metadata(record, cfg) if content_fields_scrubbed else _scrub_record(record, cfg)
+    rec = _scrub_record(record, cfg)
     _raw_append(path, json.dumps(rec, ensure_ascii=False, allow_nan=False) + "\n")
     return rec
 

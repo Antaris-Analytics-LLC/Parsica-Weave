@@ -414,7 +414,9 @@ history keys on the id, so a rename never orphans a chunk.
 - **Catch up deliberately:** `python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" sync --hours 12` prints a compact
   digest of the last N hours across the whole workspace, every project and every other lane,
   each entry labeled `[<project-key> · <channel-or-sess>]`. Cross-lane context is a
-  choice you make, not a default you inherit.
+  choice you make, not a default you inherit. Every line of the digest is scrubbed again
+  here with PII on and the workspace refusal union before it is shown, whatever the source
+  project's own `scrub_pii` setting.
 - **Manage the registry:** `python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" channel --list | --name <name> |
   --rename <old> <new>`.
 
