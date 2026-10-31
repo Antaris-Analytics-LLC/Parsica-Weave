@@ -145,28 +145,27 @@ def test_an_undeletable_file_is_survived(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- the handshake
 
 
-def test_the_workflow_schema_accepts_the_swept_key():
+def test_the_handshake_schema_accepts_the_swept_key():
     """The apply stage's schema is additionalProperties:false. A key the stage PRINTS but the
     schema omits fails validation and turns a successful apply into a stage error - the exact
     failure test_enrich_apply_guard.py exists for. Adding `swept` to the output without adding it
-    to the schema would have reintroduced it, so pin the pair together."""
-    import re
-    wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich-swarm.workflow.js")
-    with open(wf, encoding="utf-8") as fh:
-        src = fh.read()
-    assert "additionalProperties: false" in src
-    assert re.search(r"swept:\s*\{\s*type:\s*'number'\s*\}", src), \
-        "enrich_apply prints `swept` but the workflow schema does not allow it"
+    to the schema would have reintroduced it, so pin the pair together. (The schema is read from
+    scripts/enrich_handshake.schema.json; until October 2026 it lived inside the enrich-swarm
+    workflow file, removed in REVIEW-2026-10.md class (f).)"""
+    schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich_handshake.schema.json")
+    with open(schema_path, encoding="utf-8") as fh:
+        apply_schema = json.load(fh)["apply"]
+    assert apply_schema["additionalProperties"] is False
+    assert apply_schema["properties"].get("swept", {}).get("type") == "number", \
+        "enrich_apply prints `swept` but the handshake schema does not allow it"
 
 
-def test_apply_advertises_swept_in_its_output_contract():
-    """The stage prompt tells the worker what shape to expect; drifting it from the real output
-    is how a worker starts 'helpfully' reshaping the JSON."""
-    wf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich-swarm.workflow.js")
-    with open(wf, encoding="utf-8") as fh:
-        src = fh.read()
-    assert '"swept":S' in src or '"swept": S' in src, \
-        "the apply prompt still advertises the pre-sweep output shape"
+def test_apply_documents_swept_in_its_own_output_contract():
+    """The stage's own docstring states the shape it prints; drifting it from the real output is
+    how a reader starts expecting the wrong keys. (This slot used to check the worker prompt in
+    the removed workflow; the stage's documentation is now the one place the shape is stated in
+    prose.)"""
+    assert '"swept"' in (enrich_apply.__doc__ or ""), "the apply stage's docstring omits swept"
 
 
 if __name__ == "__main__":

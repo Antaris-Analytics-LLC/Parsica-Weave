@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Autonomous enrichment swarm - APPLY stage.
+"""Enrichment - APPLY stage (operator-run).
 
-Reads the workers' overlay files (<inbox>/<id>.overlay.json), validates each (tolerating a
-stray markdown fence or trailing prose), assembles {chunk_id: overlay}, and applies them
-through the store's enrichment gateway - which scrubs every field and honors the human_only
-fence on the way in. Prints {"applied": N, "malformed": M} as JSON on stdout.
-The inbox defaults to the SAME deterministic per-project path enrich_prep stages into
-(re-derived from --cwd), so the path never has to transit worker context.
+Reads overlay files (<inbox>/<id>.overlay.json), validates each (tolerating a stray markdown
+fence or trailing prose), assembles {chunk_id: overlay}, and applies them through the store's
+enrichment gateway - which scrubs every field and honors the human_only fence on the way in.
+Prints {"applied": N, "malformed": M, "swept": S} as JSON on stdout; the numbers are counted by
+this process. The inbox defaults to the SAME deterministic per-project path enrich_prep stages
+into (re-derived from --cwd).
 
-Stage 3 of the `enrich-swarm` workflow.
+The second of two operator-run stages (scan: enrich_prep.py). The background workflow that once
+drove them was removed in October 2026 (REVIEW-2026-10.md, pile one, class (f)); see
+AUTONOMOUS_ENRICHMENT.md. The stdout shapes are pinned in enrich_handshake.schema.json.
 """
 import argparse
 import json
