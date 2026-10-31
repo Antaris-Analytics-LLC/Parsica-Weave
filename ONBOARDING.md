@@ -103,10 +103,14 @@ goes through the scrubbing wrapper, which redacts credentials, PII, and the oper
 refusal-listed terms before anything touches disk:
 
 ```
-echo '<markdown>' | python <scripts>/pcx.py note --kind working --cwd "<project>"
-echo '<markdown>' | python <scripts>/pcx.py note --kind journal --cwd "<project>"
-echo '<markdown>' | python <scripts>/pcx.py note --kind lesson  --cwd "<project>"
+python <scripts>/pcx.py note --kind working --cwd "<project>" <<'PARSICA_NOTE'
+<markdown>
+PARSICA_NOTE
 ```
+
+The same form with `--kind journal` or `--kind lesson`. The quoted delimiter is what makes the
+content data: the shell passes a heredoc body through untouched, so a quote, a backslash or a
+dollar sign in a note never reaches the shell.
 
 - **Working set** (`--kind working`, replaces in full): pinned facts and open loops
   only. Keep it under a screen. Every stale line you leave costs your successor

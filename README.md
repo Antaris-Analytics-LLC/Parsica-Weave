@@ -280,16 +280,21 @@ makes the view "what happened elsewhere" rather than an echo of the session you 
 
 ### Maintain the working set, journal, and lessons
 
-Never edit these files by hand. Pipe content through the `note` wrapper, which scrubs
-it before it lands:
+Never edit these files by hand. Hand content to the `note` wrapper over standard input, as a
+heredoc whose delimiter is quoted, and it scrubs the text before it lands. The quoted delimiter
+is what makes the content data: the shell passes it through untouched, so a quote, a backslash
+or a dollar sign in a note never reaches the shell. (Until October 2026 the examples here and in
+the skill spliced the text into a single-quoted echo, which a quote in the content broke out of;
+REVIEW-2026-10.md.)
 
 ```
-echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind working --cwd "<project>"
-echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind journal --cwd "<project>"
-echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind lesson  --cwd "<project>"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind working --cwd "<project>" <<'PARSICA_NOTE'
+<markdown>
+PARSICA_NOTE
 ```
 
-`working` replaces that project's living document in full. `journal` and `lesson`
+The same form with `--kind journal` or `--kind lesson` appends to the journal or the lessons
+file. `working` replaces that project's living document in full. `journal` and `lesson`
 append to the workspace journal and lessons file, each entry stamped
 `(YYYY-MM-DD HH:MM UTC · session <sess8> · <project-key>)`; pass `--sess <sess8>` so
 the stamp names your session (the checkpoint note embeds it). SKILL.md teaches the
@@ -304,12 +309,13 @@ Deterministic capture finds what you typed. Enrichment finds what you *meant*:
 
 ```
 python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --list-pending
-echo '{"<chunk-id>": {"topic": ["auth"], "summary": "...", "keywords": ["..."],
+python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --cwd "<project>" --apply-stdin <<'PARSICA_ENRICH'
+{"<chunk-id>": {"topic": ["auth"], "summary": "...", "keywords": ["..."],
   "search_queries": ["..."], "facts": ["..."],
   "decisions": [{"text": "retries use exponential backoff",
                  "conviction": {"value": 0.8, "domain": ["architecture"],
-                                "why": "...", "would_weaken_if": ["..."]}}]}}' \
-  | python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --cwd "<project>" --apply-stdin
+                                "why": "...", "would_weaken_if": ["..."]}}]}}
+PARSICA_ENRICH
 ```
 
 Decisions carry **conviction at creation**, captured once and never overwritten. When

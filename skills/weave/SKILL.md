@@ -64,24 +64,35 @@ the working set, `lessons.md`, or the journal directly** - always pipe your cont
 these files bypasses the safety layer and writes a pasted secret straight to disk.
 `journal` and `lesson` appends are stamped with time, session, and project; pass
 `--sess <sess8>` so the stamp names your session (the checkpoint directive embeds it).
+Hand the content to the wrapper over standard input as a heredoc whose delimiter is quoted,
+exactly as the examples below show, with the closing delimiter alone on its own line: the
+shell passes a quoted heredoc through untouched, so a quote, a backslash or a dollar sign in
+the content is data to the wrapper and never shell. Never splice content into a quoted
+string on the command line.
 
 - **Maintain the working set** (pinned facts + OPEN LOOPS). When the branch, posture, a key
   decision, or a hard constraint changes - or when you start/finish a thread - refresh it. Keep
   it terse and *true*; stale pinned facts are worse than none. Pipe the **full refreshed doc**
   (the wrapper replaces it in place):
   ```
-  echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind working --cwd "<C>"
+  python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind working --cwd "<C>" <<'PARSICA_NOTE'
+  <markdown>
+  PARSICA_NOTE
   ```
 - **Write lessons (scars).** When you hit a wall, get something wrong, or learn something
   load-bearing, record a dated entry - what happened + the rule learned, one scar per entry.
   This is what feeds judgment over time:
   ```
-  echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind lesson --cwd "<C>"
+  python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind lesson --cwd "<C>" <<'PARSICA_NOTE'
+  <markdown>
+  PARSICA_NOTE
   ```
 - **Keep a journal.** At each ~20-turn checkpoint (the hook prompts you), record a tight
   ~150-word entry - key decisions, current task/phase, open threads, next step:
   ```
-  echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind journal --cwd "<C>"
+  python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind journal --cwd "<C>" <<'PARSICA_NOTE'
+  <markdown>
+  PARSICA_NOTE
   ```
 
 ## Retrieving (retrieval-first)
@@ -131,10 +142,13 @@ that was removed in October 2026 (see `AUTONOMOUS_ENRICHMENT.md` and `REVIEW-202
                                         "why": "...", "would_weaken_if": ["..."]}}]
    }
    ```
-3. Persist by **piping** the `{chunk_id: {...}}` map through stdin - never write raw
-   enrichment JSON to a workspace temp file (that's an un-scrubbed disk surface):
+3. Persist by **piping** the `{chunk_id: {...}}` map through stdin as a quoted heredoc - never
+   write raw enrichment JSON to a workspace temp file (that's an un-scrubbed disk surface), and
+   never splice it into a quoted string on the command line (JSON is full of quotes):
    ```
-   echo '<json>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --cwd "<C>" --apply-stdin
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --cwd "<C>" --apply-stdin <<'PARSICA_ENRICH'
+   <json>
+   PARSICA_ENRICH
    ```
    It scrubs the output, adds deterministic categories, stamps the spec version, and writes
    it in place.
