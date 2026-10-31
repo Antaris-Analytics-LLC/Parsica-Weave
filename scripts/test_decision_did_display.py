@@ -65,6 +65,7 @@ def test_a_user_can_lift_the_did_and_calibrate_with_it(tmp_path, monkeypatch):
     prints, and confirm the calibration MOVED. Nothing here reaches into the overlay - if the
     only path to a did were internal knowledge of the store, this test could not be written."""
     monkeypatch.setattr(store, "STORE_ROOT", tmp_path)
+    monkeypatch.setattr(store, "GLOBAL_CONFIG", tmp_path / "config.json")   # moves with the root
     cwd = str(tmp_path / "proj")
     os.makedirs(cwd, exist_ok=True)
     store.ensure_workspace(cwd)

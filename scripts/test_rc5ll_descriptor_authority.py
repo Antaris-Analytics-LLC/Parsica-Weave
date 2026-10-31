@@ -232,8 +232,11 @@ def test_state_lock_cannot_create_external_target_when_link_wins_race(env, tmp_p
         return real_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(store.os, "open", attack)
-    with store._state_lock(state, timeout=0.01) as got:
-        assert got is False
+    # Until October 2026 the refused open degraded to an unlocked yield (got False); the lock now
+    # fails closed (StateLockError) and the body never runs. The victim is still never created.
+    with pytest.raises(store.StateLockError):
+        with store._state_lock(state, timeout=0.01):
+            pass
     assert not victim.exists()
 
 

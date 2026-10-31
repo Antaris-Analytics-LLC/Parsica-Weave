@@ -59,6 +59,10 @@ def fresh_root(monkeypatch, tmp_path):
     module-level default root every other test in this file relies on."""
     root = tmp_path / "store_root"
     monkeypatch.setattr(store, "STORE_ROOT", root)
+    # GLOBAL_CONFIG moves with the root: since October 2026 a config that is present but outside
+    # the store root is REFUSED (StoreReadError), not silently read as empty, so a stale path left
+    # by another test module would otherwise fail every read here closed.
+    monkeypatch.setattr(store, "GLOBAL_CONFIG", root / "config.json")
     return root
 
 

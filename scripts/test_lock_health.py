@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
-"""A lock that cannot be taken must be VISIBLE, even though taking it is optional.
+"""A lock that cannot be taken must be VISIBLE and must REFUSE.
 
-`_state_lock` fails OPEN on purpose: continuity bookkeeping must never wedge a session, and a
-guard that locks a user out of their own memory over a false positive is a worse product than
-one that degrades. The cost of that policy is that a lock name occupied by a directory junction,
-a symlink, a directory or a FIFO degrades to "unlocked" IDENTICALLY to an ordinary two-second
-contention timeout. One is transient and fine. The other is permanent, and means every
-concurrent session has been racing the state file with no protection for as long as the object
-has been sitting there. Nothing in the system could tell them apart, so nothing could say so.
+Until October 2026 `_state_lock` failed OPEN by policy: a lock name occupied by a directory
+junction, a symlink, a directory or a FIFO degraded to "unlocked" IDENTICALLY to an ordinary
+two-second contention timeout, and the read-merge-write under it ran anyway. #122 fixed the
+DIAGNOSIS axis only: lock_health() names an unlockable sidecar and doctor reports it. The
+integrity pass (REVIEW-2026-10.md, pile one, class (a), store.py 1022-1024) closed the
+ENFORCEMENT axis too: both cases now raise StateLockError at entry and the body never runs.
 
-#122 is fixed on the DIAGNOSIS axis, not the enforcement axis. These tests therefore pin two
-properties that pull in opposite directions, and both matter:
+These tests therefore pin three properties:
 
-  1. lock_health() NAMES an unlockable sidecar (the attack case), and
-  2. _state_lock still degrades quietly rather than raising (the fail-open policy), and
-     lock_health() stays SILENT on an ordinary healthy store (the false-positive companion).
-
-Without (2), a future "hardening" pass could turn the fail-open into a fail-closed and every
-attack test here would still be green while the product got worse for real users.
+  1. lock_health() NAMES an unlockable sidecar (the attack case) and stays SILENT on an ordinary
+     healthy store (the false-positive companion);
+  2. _state_lock REFUSES (raises) on a redirected sidecar, so no unlocked merge can run; and
+  3. _state_lock still takes an ordinary lock, so refusing is for the broken case only.
 """
 import os
 import subprocess
@@ -142,19 +138,21 @@ def test_every_finding_carries_a_reason(tmp_path):
 # --------------------------------------------------------------------------- the policy itself
 
 
-def test_state_lock_degrades_quietly_when_the_sidecar_is_a_redirect(tmp_path, monkeypatch):
-    """The fail-open policy, pinned. This is the test that must go red if anyone ever converts
-    the diagnosis into enforcement: a planted redirect yields False (unlocked) and does NOT
-    raise. Jake's rule - being locked out of your own continuity is a worse failure than an
-    unlocked merge."""
+def test_state_lock_refuses_when_the_sidecar_is_a_redirect(tmp_path, monkeypatch):
+    """The enforcement half. A planted redirect at the lock name raises StateLockError at entry
+    and the body under the lock never runs: the write is lost, never raced. (Until October 2026
+    this test pinned the opposite: a redirect yielded False and the body ran unlocked.)"""
     root = tmp_path / "ws"
     os.makedirs(str(root))
     monkeypatch.setattr(store, "STORE_ROOT", root)
     state = root / ".state.json"
     if not _redirect(root / ".state.json.lock", tmp_path / "outside"):
         pytest.skip("directory redirects unavailable here")
-    with store._state_lock(state) as got:
-        assert got is False, "a redirected lock name must degrade to unlocked, not appear taken"
+    ran = []
+    with pytest.raises(store.StateLockError):
+        with store._state_lock(state):
+            ran.append(True)
+    assert not ran, "the body under a refused lock must never run"
 
 
 def test_state_lock_still_takes_an_ordinary_lock(tmp_path, monkeypatch):
@@ -186,8 +184,9 @@ def test_the_reparse_check_is_reached_not_skipped(tmp_path, monkeypatch):
         return real(p)
 
     monkeypatch.setattr(store, "is_reparse_point", spy)
-    with store._state_lock(root / ".state.json") as got:
-        assert got is False
+    with pytest.raises(store.StateLockError):
+        with store._state_lock(root / ".state.json"):
+            pass
     assert any(s.endswith(".state.json.lock") for s in seen), \
         "the reparse check was never reached - the except clause is narrow again"
 

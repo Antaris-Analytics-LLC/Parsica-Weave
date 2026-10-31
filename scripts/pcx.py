@@ -21,7 +21,9 @@ Three layers:
 Events: Stop | UserPromptSubmit | SessionStart | PreCompact | PostToolUse
 Invoked as:  python pcx.py <EventName>   (also falls back to stdin hook_event_name)
 
-Every handler is wrapped fail-silent: a continuity helper must never break a session.
+Every handler is wrapped so a continuity helper never breaks a session, and never fails silently
+either: a failure writes one audit line (a category and no content) to the workspace's
+audit.jsonl and one constant line to stderr, then the hook exits 0.
 """
 import sys
 import os
@@ -432,6 +434,20 @@ def _build_chunk(turn, cfg, chan=""):
 
     files, cmds, tools, skills = _enrich(recs)
 
+    # The human-only fence runs FIRST, on the RAW turn: every text field, whole, before any cut and
+    # before any scrub. Until October 2026 it ran only at the gateway, on the cut and scrubbed chunk,
+    # so a marker or term past the 700/1,800-character cut, a fenced name that was also a refusal
+    # term (already turned into <redacted>), or a fenced email address or phone number (already
+    # turned into [EMAIL]/[PHONE]) was missed and the turn was stored (REVIEW-2026-10.md, pile one,
+    # class (a), pcx.py 440-448 and 661). A refusal raises store.HumanOnlyRefused, which the caller
+    # records with the chunk id, the size and the date - never the text. The gateway's own check
+    # still runs on the finished chunk.
+    raw_blob = "\n".join([user_text or "", asst_text or ""]
+                         + [str(x) for x in list(files) + list(cmds) + list(tools) + list(skills)])
+    if store.is_human_only_text(raw_blob, cfg):
+        seed = "|".join([ts, sess, (user_text or "")[:200]])
+        raise store.HumanOnlyRefused(_safe_chunk_id(cid, seed), len(raw_blob), _date_of(ts))
+
     # scrub BEFORE truncating (a secret must not survive at a truncation boundary),
     # then slice. Tags are scrubbed too - a secret can ride a command arg or a path.
     red = [0]
@@ -640,9 +656,12 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
         # incremental, cursor-advanceable progress instead of risking the hook timeout with
         # nothing yet on disk. Per-window (per-PID) shard so concurrent windows append to
         # DIFFERENT files (a shared day-file append is a silent lost write on Windows).
-        # _build_chunk already scrubs every value BEFORE truncating, so the append passes
-        # content_fields_scrubbed (no redundant second scrub); the human_only fence and the
-        # reserved-key metadata validation still run at the gateway.
+        # _build_chunk runs the human-only fence on the RAW turn first, then scrubs every value
+        # BEFORE truncating, so the append passes content_fields_scrubbed (no redundant second
+        # scrub); the gateway's own human_only check and the reserved-key metadata validation still
+        # run there. Every refusal and every failure below is RECORDED (store.audit_line): until
+        # October 2026 the gateway's receipt was discarded and any error was a bare continue
+        # (REVIEW-2026-10.md, pile one, class (a), pcx.py 661-667).
         for turn in _chunk_turns(flush_records):
             try:
                 head = turn["prompt"] or (turn["recs"][0] if turn["recs"] else {})
@@ -658,13 +677,31 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
                 if ccid and ccid in dseen:
                     continue
                 shard = md / f"{date}.{os.getpid()}.jsonl"
-                store.append_record(shard, chunk, cfg, content_fields_scrubbed=True)
+                result = store.append_record(shard, chunk, cfg, content_fields_scrubbed=True)
+                if isinstance(result, dict) and result.get("stored") is False:
+                    # the gateway refused the finished chunk: recorded, never discarded
+                    store.audit_line("capture_refused", event="mirror",
+                                     reason=str(result.get("reason")), chunk=ccid, date=date)
+                else:
+                    written_dates.add(date)
                 if ccid:
                     dseen.add(ccid)
                     index_adds.setdefault(date, set()).add(ccid)
-                written_dates.add(date)
-            except Exception:
-                continue        # a single malformed record skips its own chunk, never the batch
+            except store.HumanOnlyRefused as exc:
+                # the fence refused the RAW turn before any cut or scrub: one audit line (chunk id,
+                # size, date, never text), and the id is marked seen so the turn is not rebuilt on
+                # the next Stop
+                store.audit_line("human_only_refused", event="mirror", chunk=exc.chunk_id,
+                                 size=exc.size, date=exc.date)
+                if exc.chunk_id:
+                    dseen_by_date.setdefault(exc.date, set()).add(exc.chunk_id)
+                    index_adds.setdefault(exc.date, set()).add(exc.chunk_id)
+                continue
+            except Exception as exc:
+                # a single malformed record skips its own chunk, never the batch - recorded by
+                # category and exception class, never silent
+                store.audit_line("capture_error", event="mirror", error=type(exc).__name__)
+                continue
         if index_adds:
             # Rides save_state's locked union merge (the _ledger_add pattern): concurrent
             # windows UNION their ids instead of clobbering, and the merge applies the
@@ -2907,9 +2944,15 @@ def main():
         return
     try:
         fn(data)
-    except Exception:
-        # fail silent - never break a session over continuity bookkeeping
-        pass
+    except Exception as exc:
+        # never break a session over continuity bookkeeping - and never fail silently either: one
+        # audit line (category, event, exception class; no content) and one constant stderr line,
+        # then exit 0. Until October 2026 this was a bare pass (REVIEW-2026-10.md, pile one, class
+        # (a), pcx.py 2908-2912).
+        try:
+            store.audit_line("hook_error", event=event, error=type(exc).__name__)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
