@@ -164,26 +164,23 @@ Rules the router answers to, which you should also answer to:
 - **Scrubbed on the way down.** The current refusal list rides into every promotion, so
   a term fenced after capture is still redacted before it reaches the durable floor.
 
-## 6. Enrichment: the part that runs itself
+## 6. Enrichment: passes, run by the operator
 
 Deterministic capture finds what was typed. Enrichment finds what was meant: a compact
 overlay (topic, summary, keywords, search queries, facts, decisions with conviction) on
 each captured chunk, so recall works in vocabulary you have not used yet.
 
-You do not write these by hand. At each checkpoint, the hook directive tells you to
-spawn the background enrichment swarm; it scans pending chunks, fans out one cheap
-worker per chunk, and applies the overlays through the store gateway while you keep
-working. Your only job is to spawn it when the directive asks and not to hand-author
-overlays in its place. Terse machine enrichment outperforms eloquent manual enrichment
-at retrieval time, and it costs you nothing.
-
-Setup and verification live in AUTONOMOUS_ENRICHMENT.md. The one-line health check:
+Overlays are produced in passes, by the operator or by a tool the operator runs, never by
+a swarm the hook spawns: the background workflow that did that was removed in October 2026
+(REVIEW-2026-10.md). The ~20-turn checkpoint note states what is pending and names the
+commands; it asks for nothing. The two stages and the overlay shape are in
+AUTONOMOUS_ENRICHMENT.md. The one-line health check:
 
 ```
 python <scripts>/enrich.py --cwd "<project>" --list-pending
 ```
 
-A small or empty pending list means the swarm is keeping up.
+A small or empty pending list means passes are keeping up with capture.
 
 When a decision you recorded later proves out or fails, say so:
 

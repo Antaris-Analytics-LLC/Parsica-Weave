@@ -109,12 +109,11 @@ The mirror captures each turn deterministically (text + files/commands/tools). O
 that, add a **semantic overlay** so retrieval matches how a person actually searches - the
 difference between "I tagged the files" and "I can find the turn by what it was *about*."
 
-**When:** at each ~20-turn checkpoint (the directive reminds you). The checkpoint way is
-autonomous: do NOT hand-author overlays - spawn the background enrichment swarm via the
-Workflow tool (see `AUTONOMOUS_ENRICHMENT.md`) and let it work the pending queue. Enrich
-in passes, never per turn.
+**When:** at each ~20-turn checkpoint (the note states the pending count). Enrichment runs in
+passes, never per turn, and never as a swarm the hook spawns: the background workflow that did
+that was removed in October 2026 (see `AUTONOMOUS_ENRICHMENT.md` and `REVIEW-2026-10.md`).
 
-**How (the manual fallback, for when the swarm is unavailable):**
+**How:**
 1. `python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --list-pending` -> chunks
    needing enrichment (id + text). Enrich from the returned chunk **text** - the stored,
    already-scrubbed record - not from raw session recall, so the overlay stays faithful to

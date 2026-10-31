@@ -44,12 +44,9 @@ jobs:
         shell: python
         run: |
           # A CRLF checkout must never reach the files .gitattributes pins to LF: a
-          # CR in a shebang is "bad interpreter" on POSIX, and a CR in a workflow
-          # script is rejected by the Workflow permission handler as a hidden control
-          # character (which silently kills autonomous enrichment on Windows).
-          import glob, sys
+          # CR in a shebang is "bad interpreter" on POSIX.
+          import sys
           pinned = ["bin/parsica-weave", "bin/parsica-weave.py", "hooks/weave-run.sh"]
-          pinned += glob.glob("scripts/*.workflow.js")
           bad = [p for p in pinned if b"\r" in open(p, "rb").read()]
           if bad:
               sys.exit("CR found in LF-pinned files: %r" % bad)

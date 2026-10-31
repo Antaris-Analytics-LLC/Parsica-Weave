@@ -59,9 +59,9 @@ From here capture is automatic; point your agent at `ONBOARDING.md` for its firs
 - [Pairs with Parsica Spirit](#pairs-with-parsica-spirit)
 
 **The trust model, in one paragraph.** Weave is a Claude Code tool, not a sealed vault.
-Hook-injected recall becomes Claude Code context, and the optional enrichment workflow
-asks Claude workers to summarize staged chunks, so recalled or enriched text may be sent
-to the model according to your Claude Code and Anthropic settings. Use `[[human-only]]`,
+Hook-injected recall becomes Claude Code context, and enrichment, when you run it, hands
+staged chunks to whatever you use to write the overlays, so recalled or enriched text may be
+sent to a model according to your Claude Code and Anthropic settings. Use `[[human-only]]`,
 refusal terms, and project policy for anything that must never be re-injected or
 enriched.
 
@@ -148,16 +148,16 @@ parsica-weave/
   README.md                   # this file
   ONBOARDING.md               # the agent's first thread: habits, the router, first 15 minutes
   TO_THE_NEXT_AGENT.md        # one agent's own account of a real release night - what it felt like to use this for real
-  AUTONOMOUS_ENRICHMENT.md    # the background enrichment swarm: what, why, setup, verification
+  AUTONOMOUS_ENRICHMENT.md    # enrichment in passes: the two operator-run stages, and what was removed
   config.example.json         # every config key, real defaults, valid JSON - copy, don't retype
   scripts/
     pcx.py                    # hook engine (Stop / UserPromptSubmit / SessionStart / PreCompact / PostToolUse) + `name` / `note` / `promote` / `channel` / `sync` / `migrate`
     scrub.py                  # credential/PII redactor + user refusal list (scrub-before-store)
     store.py                  # paths, project keying, config, and the sole-path write gateway
     enrich.py                 # semantic overlay: scrub-on-output guard, categories, decisions + conviction
-    enrich_prep.py            # enrichment swarm, scan stage: stage pending chunks to an inbox
-    enrich_apply.py           # enrichment swarm, apply stage: validate + apply through the gateway
-    enrich-swarm.workflow.js  # the swarm itself: scan, cheap-worker fan-out, apply
+    enrich_prep.py            # enrichment, scan stage: stage at most 50 pending chunks to an inbox
+    enrich_apply.py           # enrichment, apply stage: validate + apply through the gateway
+    enrich_handshake.schema.json  # the two stages' stdout contract (strict), pinned by tests
     calibrate.py              # conviction calibration ledger: confirm/contradict events earn weight
     doctor.py                 # install self-check: layout, scrub gate, capture
     verify_salt.py            # recovery check: does a restored salt match the ledger fingerprint?
@@ -480,9 +480,9 @@ switch to reach for when you want to isolate whether the durable tier is involve
 Everything Weave captures is stored **locally**. The store is a single workspace at
 `~/.claude/parsica-weave/`, and the plugin's own code opens no outbound network connections and
 sends no telemetry. Weave is a Claude Code tool, not an air-gapped vault, though: text
-injected by hooks becomes Claude Code context, and optional enrichment workers process staged
-chunks through the configured Claude deployment, so that text may be included in model requests
-according to your Claude Code and Anthropic settings.
+injected by hooks becomes Claude Code context, and whatever you run to write enrichment overlays
+reads the staged chunks, so that text may be included in model requests according to your Claude
+Code and Anthropic settings. Nothing in Weave starts workers on its own.
 Captured chat is scrubbed for secrets and PII **before** it is written, at the single store-write
 seam every writer crosses.
 

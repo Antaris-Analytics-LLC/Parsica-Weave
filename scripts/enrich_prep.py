@@ -279,7 +279,13 @@ def main():
     ap = argparse.ArgumentParser(prog="enrich_prep.py")
     ap.add_argument("--cwd", required=True)
     ap.add_argument("--inbox", default=None, help="override the inbox dir (default: a stable per-project temp dir)")
-    ap.add_argument("--limit", type=int, default=0, help="cap the number of chunks staged (0 = all)")
+    # Capped since October 2026: this stage fed a fan-out that started one worker per staged chunk
+    # with no cap of its own (REVIEW-2026-10.md, pile one, class (f)). The pending listing this
+    # stage reads (enrich.py --list-pending) returns at most 50 chunks per run, so 50 is the most a
+    # run can stage; --limit lowers it. The next run takes what is still pending.
+    ap.add_argument("--limit", type=int, default=50,
+                    help="cap the number of chunks staged per run (default 50, which is also the most "
+                         "the pending listing returns per run; a smaller value stages fewer)")
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))

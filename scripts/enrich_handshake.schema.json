@@ -1,0 +1,29 @@
+{
+  "_about": "The stdout contract of the two operator-run enrichment stages. scan is what enrich_prep.py prints; apply is what enrich_apply.py prints. Both are strict: no key beyond these, and the required keys are safety signals that a reader must not be able to miss. Until October 2026 these two schemas lived inside enrich-swarm.workflow.js, the background fan-out removed in the integrity pass (REVIEW-2026-10.md, pile one, class f); the tests read them from this file now.",
+  "scan": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ids": {"type": "array", "items": {"type": "string"}},
+      "count": {"type": "number"},
+      "inbox": {"type": "string"},
+      "inbox_withheld": {"type": "boolean"},
+      "skipped_fenced": {"type": "number"},
+      "refused": {"type": "string"},
+      "note": {"type": "string"},
+      "error": {"type": "string"}
+    },
+    "required": ["ids", "count", "inbox", "inbox_withheld", "skipped_fenced"]
+  },
+  "apply": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "applied": {"type": "number"},
+      "malformed": {"type": "number"},
+      "swept": {"type": "number"},
+      "refused": {"type": "string"}
+    },
+    "required": ["applied", "malformed"]
+  }
+}
