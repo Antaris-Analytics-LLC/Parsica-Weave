@@ -222,7 +222,7 @@ workspace, and the agent wakes up in any of them already knowing all of it.
    habit that makes it worth having, the two-floor router, and a first-fifteen-minutes
    checklist to watch the agent work through.
 
-Until the pile-one pull requests listed in REVIEW-2026-10.md merge, treat the scrub as best effort and keep sensitive material out.
+The scrub covers known credential shapes and four kinds of PII, and nothing screens stored text for instructions before it is re-injected. Keep sensitive material out of the sessions it captures; REVIEW-2026-10.md lists what remains.
 
 ## How to use it
 
