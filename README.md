@@ -243,10 +243,11 @@ Inside Claude Code the same two things are slash commands: `/name <name>` runs t
 ceremony, and `/whoami` shows the current identity, byline state, and live preview.
 
 One name per workspace, by design. The name is a display label, never a store key, so
-renaming or resetting never touches a single memory. Once named, the agent is instructed to
-open every reply with `[Name · <session-tag>]` - the byline - so the name you chose is
-visible on every response. This is a prompt-layer convention the agent honors, not something
-the plugin enforces on the reply text. `agent_name` in config still works; the verb is just
+renaming or resetting never touches a single memory. Once named, every injection states the
+byline the name produces for the session, `[Name · <session-tag>]`, as a fact about the
+workspace; whether the agent opens its replies with it is the agent's own convention. Injected
+context describes and does not command (since October 2026; see REVIEW-2026-10.md), and the
+plugin enforces nothing on the reply text. `agent_name` in config still works; the verb is just
 the front door.
 
 ### Query your history
@@ -291,10 +292,11 @@ echo '<markdown>' | python "${CLAUDE_PLUGIN_ROOT}/scripts/pcx.py" note --kind le
 `working` replaces that project's living document in full. `journal` and `lesson`
 append to the workspace journal and lessons file, each entry stamped
 `(YYYY-MM-DD HH:MM UTC · session <sess8> · <project-key>)`; pass `--sess <sess8>` so
-the stamp names your session (the checkpoint directive embeds it). SKILL.md teaches
-the agent this discipline; the hook prompts a journal checkpoint every ~20 turns of
-each session. Mark a note human-only to keep it out of the store entirely (classified,
-never written): add `--human-only` to any `note` command.
+the stamp names your session (the checkpoint note embeds it). SKILL.md teaches the
+agent this discipline; every ~20 turns of each session the hook injects a checkpoint
+note that states the turn count and names these commands, and asks for nothing. Mark a
+note human-only to keep it out of the store entirely (classified, never written): add
+`--human-only` to any `note` command.
 
 ### Enrich the mirror (semantic recall)
 

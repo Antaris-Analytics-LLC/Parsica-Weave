@@ -102,7 +102,7 @@ _MAX_INJECT_CHARS = 9500   # comfortably under the 10k platform ceiling (headroo
 
 _IDENT_SURFACES = (
     "Queryable surfaces: the store (query.py), the journal (summarized history), the handoff "
-    "(current continuity). Grep the code, grep the store."
+    "(current continuity); the code and the store can both be searched."
 )
 
 
@@ -117,11 +117,14 @@ def _cap_inject(text, max_chars=_MAX_INJECT_CHARS):
 def _identity_header(cfg, sess=""):
     """The identity rider: a compact block that rides EVERY injection so identity is a property of
     all context the system adds, not just a boot event. Carries the agent's name (display metadata;
-    blank on an un-named install), the byline directive when enabled (the name signs every response
-    - what makes choosing one carry weight), plus the standing queryable-surfaces line. Kept small,
-    and never dropped when an inject is truncated (see _ride). `sess` is the host-supplied session
-    id (never self-authored); sanitized + capped so a garbled value can't smuggle content into a
-    standing instruction. Prompt-layer by design: the agent signs because it honors its identity."""
+    blank on an un-named install), the byline when enabled (the signature the workspace's name
+    produces for this session, stated as a fact about the workspace), plus the standing
+    queryable-surfaces line. Kept small, and never dropped when an inject is truncated (see _ride).
+    `sess` is the host-supplied session id (never self-authored); sanitized + capped so a garbled
+    value can't smuggle content into a standing line. Injected context describes; it does not
+    command: until October 2026 this header told the agent to open every response with the byline
+    (REVIEW-2026-10.md, pile one, class (c), pcx.py 130). Whether the agent signs is its own
+    convention, as the README has always said."""
     cfg = cfg or {}
     # The header rides UN-scrubbed (body scrub runs separately) and is truncation-protected, so the
     # name is neutralized here: structural safety (byline contract) AND the operator's own scrub/refusal
@@ -129,7 +132,7 @@ def _identity_header(cfg, sess=""):
     name = _identity_name(cfg)
     who = ("You are %s. " % name) if name else ""
     sig = _byline_signature(cfg, sess)
-    sign = ('Open every response with the single line "%s" (your byline). ' % sig) if sig else ""
+    sign = ('The byline for this session is "%s" (bylines are enabled in this workspace). ' % sig) if sig else ""
     return "[identity] %s%s%s" % (who, sign, _IDENT_SURFACES)
 
 
@@ -754,41 +757,37 @@ def handle_stop(data):
 
 
 # --------------------------------------------------------------------------
-# UserPromptSubmit - fire the journal checkpoint directive when due
+# UserPromptSubmit - inject the journal checkpoint note when due
 # --------------------------------------------------------------------------
 def _embed_path(p):
-    """A path embedded in an agent-facing instruction. Strips characters that could break
-    out of the quoted span or smuggle an instruction into the directive (quotes, backticks,
-    $, newlines) - the agent copies this text into a shell."""
+    """A path embedded in agent-facing reference text. Strips characters that could break out of
+    the quoted span or smuggle an instruction into the note (quotes, backticks, $, newlines)."""
     return re.sub(r'["`$\r\n]', '', str(p or ''))
 
 
 def _checkpoint_directive(cwd, cfg, due, sess):
-    """The ~N-turn journal/working/lesson + enrichment-swarm directive (per SESSION: `due` is this
-    session's own turn count; --sess rides every note command so the append is provenance-stamped).
-    Extracted so the heartbeat can share this UserPromptSubmit seam without duplicating the emit path."""
+    """The ~N-turn checkpoint NOTE (per SESSION: `due` is this session's own turn count). Reference
+    material, not an instruction: it states where this session stands and which commands exist for
+    recording a journal entry, a working-set refresh or a lesson through the scrub gateway (the
+    --sess argument stamps an append with this session's provenance). Until October 2026 this text
+    told the agent to run three shell commands before answering and to spawn an enrichment swarm
+    (REVIEW-2026-10.md, pile one, class (c), pcx.py 729-755). Injected context may describe; it
+    may not command. The function keeps its name so the UserPromptSubmit seam and its tests read
+    the same."""
     scripts = os.path.dirname(os.path.abspath(__file__))
     pcxp = _embed_path(os.path.join(scripts, "pcx.py"))
+    enrichp = _embed_path(os.path.join(scripts, "enrich.py"))
     cwd_e = _embed_path(cwd)
     sess_e = _embed_path(sess) or "-"
-    wfp = _embed_path(os.path.join(scripts, "enrich-swarm.workflow.js")).replace("\\", "/")
-    scripts_fwd = _embed_path(scripts).replace("\\", "/")
-    cwd_fwd = _embed_path(cwd).replace("\\", "/")
     return (
-        f"[parsica-weave] ~{cfg['checkpoint_every_n']}-turn checkpoint (turn {due}, this session). "
-        f"As a quick side-action BEFORE answering, PIPE each through its scrubbing wrapper (do NOT "
-        f"write these files directly - the wrapper scrubs before storage): (1) journal - a terse "
-        f"~150-word entry (key decisions, current task/phase, open threads, next step) via "
-        f"`python \"{pcxp}\" note --kind journal --cwd \"{cwd_e}\" --sess {sess_e}`; (2) working set "
-        f"- the refreshed pinned-facts + open-loops via "
-        f"`python \"{pcxp}\" note --kind working --cwd \"{cwd_e}\" --sess {sess_e}`; "
-        f"(3) if you hit a wall or learned something load-bearing, a scar via "
-        f"`python \"{pcxp}\" note --kind lesson --cwd \"{cwd_e}\" --sess {sess_e}`; (4) enrich recent chunks "
-        f"AUTONOMOUSLY: do NOT hand-author overlays. Spawn the background enrichment swarm via the "
-        f"Workflow tool: Workflow({{scriptPath: \"{wfp}\", args: {{scripts: \"{scripts_fwd}\", "
-        f"cwd: \"{cwd_fwd}\"}}}}). It scans the pending chunks, fans out cheap "
-        f"Haiku workers to write terse overlays, and applies them through the gateway, all off your main "
-        f"loop, notifying you when done. Answer the user normally meanwhile. High-signal only."
+        f"[parsica-weave] Checkpoint note: turn {due} of this session, on the "
+        f"{cfg['checkpoint_every_n']}-turn checkpoint cadence. This is reference material for the user and the agent; "
+        f"it asks for nothing. The continuity record for this project is kept through the note "
+        f"command, which scrubs before storage: a journal entry, the working set, or a lesson is "
+        f"recorded by piping markdown into "
+        f"`python \"{pcxp}\" note --kind journal|working|lesson --cwd \"{cwd_e}\" --sess {sess_e}`. "
+        f"Pending enrichment is listed by `python \"{enrichp}\" --cwd \"{cwd_e}\" --list-pending` and "
+        f"is applied by the operator with --apply-stdin (see the README). Nothing here runs on its own."
     )
 
 
@@ -877,9 +876,9 @@ def handle_prompt(data):
         state["_clear_checkpoint_due"] = (sess_key, due)
         checkpoint = _checkpoint_directive(cwd, cfg, due, sess)
 
-    # Emit: the checkpoint DIRECTIVE goes FIRST so _ride's end-truncation can only cut the reference
-    # reground, never the instruction (which carries shell commands that must survive whole). Identity
-    # rides the front whenever there is a reground; a checkpoint-ONLY inject stays byte-for-byte as before.
+    # Emit: the checkpoint NOTE goes FIRST so _ride's end-truncation can only cut the heartbeat slice,
+    # never the note (its command paths must survive whole to be useful as reference). Identity rides
+    # the front whenever there is a reground; a checkpoint-ONLY inject stays byte-for-byte as before.
     ordered = [p for p in (checkpoint, reground) if p]
     if ordered:
         body = "\n\n".join(ordered)
@@ -1175,9 +1174,11 @@ def _pending_promote_line(cwd, cfg):
             # else unchanged -> skip
         if pending <= 0:
             return ""                      # silent at zero
-        return ("Parsica: %d item%s awaiting promote to durable memory. Tell the user; they can "
-                "run 'parsica-weave promote --dry-run' to review. Do not promote without their "
-                "go-ahead." % (pending, "" if pending == 1 else "s"))
+        # stated, not commanded (until October 2026 this line told the agent what to tell the user
+        # and what not to do; REVIEW-2026-10.md, pile one, class (c), pcx.py 1141-1143)
+        return ("Parsica: %d item%s awaiting promote to durable memory. The user can review them with "
+                "'parsica-weave promote --dry-run'; promotion is the user's call and never automatic."
+                % (pending, "" if pending == 1 else "s"))
     except Exception:
         return ""                          # any failure -> silence; never break or delay boot
 
@@ -1219,9 +1220,9 @@ def handle_session_start(data):
     if idx:
         query_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "query.py").replace(os.sep, "/")
         sections.append(
-            f"### Recent chat mirror (this project, {store.local_zone_note()}; queryable - run "
-            f"`python {query_py} --project {store.project_key(cwd)} --grep <term>` "
-            "to retrieve full chunks):\n" + idx
+            f"### Recent chat mirror (this project, {store.local_zone_note()}; full chunks are "
+            f"retrievable with `python {query_py} --project {store.project_key(cwd)} --grep <term>`):\n"
+            + idx
         )
 
     # cross-session awareness is OFF by default: live boot context stays project-scoped. The

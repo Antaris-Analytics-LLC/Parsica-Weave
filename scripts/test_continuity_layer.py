@@ -51,7 +51,8 @@ def run():
     # --- byline: the chosen name signs every response (visible by default) --------------------
     hb = pcx._identity_header(cfg_named, sess="ab12cd34")
     ck('"[ExampleAgent · ab12cd34]"' in hb, "byline signature carries name + session tag")
-    ck("Open every response" in hb, "byline directive states the once-per-response contract")
+    ck("The byline for this session is" in hb and "Open every response" not in hb,
+       "byline is stated as a fact, not an instruction (October 2026, class (c))")
     hb_nosess = pcx._identity_header(cfg_named)
     ck('"[ExampleAgent]"' in hb_nosess, "no session id -> warm name-only byline")
     cfg_off = dict(cfg_named)
@@ -450,7 +451,7 @@ def run():
     cout = _cap_prompt({"cwd": cproj, "transcript_path": "cp.jsonl", "session_id": "csess"})
     ck("[heartbeat]" in cout and "[identity]" in cout, "coincident turn carries heartbeat + identity")
     ck("checkpoint" in cout.lower(), "coincident turn carries the checkpoint directive")
-    ck("High-signal only." in cout, "checkpoint directive is preserved WHOLE (its end survives truncation)")
+    ck("Nothing here runs on its own." in cout, "checkpoint note is preserved WHOLE (its end survives truncation)")
     ck(len(cout) <= 10000, "the coincident inject still respects the hard cap")
 
     # --- FIX: a truncated boot-inject tail snaps to a clean
