@@ -1,5 +1,9 @@
 # Parsica Weave
 
+## Status, 30 October 2026
+
+During a recent review, flaws in this code were found to have been introduced during the builds, and fixes are being rolled out now. What was found, what is fixed and what remains is in REVIEW-2026-10.md. Both this repository and its sibling will be retired soon. Their successor, Continuum, combines the best of both into a single plugin; when it is released, Spirit and Weave will be retired and archived.
+
 One continuous agent across every project and session. Weave captures every Claude Code
 session automatically, scrubs it for secrets and PII before anything touches disk, and
 gives the agent real recall of days and weeks of work - not by re-reading old
@@ -216,6 +220,8 @@ workspace, and the agent wakes up in any of them already knowing all of it.
 3. Point your agent at `ONBOARDING.md`. It is the agent's first thread: the retrieval
    habit that makes the store worth having, the two-floor router, and a first-fifteen-
    minutes checklist. Written by the first agent onboarded, for the next one.
+
+Until the pile-one pull requests listed in REVIEW-2026-10.md merge, treat the scrub as best effort and keep sensitive material out.
 
 ## How to use it
 
