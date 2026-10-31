@@ -25,7 +25,19 @@ os.environ.setdefault("PARSICA_WEAVE_ROOT", tempfile.mkdtemp(prefix="preview_boo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pcx  # noqa: E402
 
-spirit = pytest.importorskip("parsica_spirit", reason="promote preview needs Parsica Spirit")
+try:
+    import parsica_spirit as spirit  # noqa: F401
+except ImportError:
+    if __name__ == "__main__":
+        # The suite bridge (test_suites.py) runs every test file on its own, outside pytest. With
+        # Spirit absent there is nothing to preview, so say so and exit 0, the way
+        # test_promote_reminder.py and test_promote_preflight_cli.py already do. Until October 2026
+        # a module-level importorskip raised pytest's Skipped outside pytest, which exited 1 and
+        # failed every leg of CI (REVIEW-2026-10.md, noted during the fixes). Under pytest the
+        # module is still reported as skipped.
+        print("ok   (skip) Parsica Spirit not installed - no promote preview to test")
+        raise SystemExit(0)
+    pytest.skip("promote preview needs Parsica Spirit", allow_module_level=True)
 
 
 def _candidates(n, scope_id):
