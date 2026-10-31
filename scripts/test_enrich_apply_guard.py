@@ -1,10 +1,12 @@
-"""enrich_apply is the APPLY stage of the enrich-swarm workflow: it prints a JSON handshake the
-workflow parses with a STRICT (additionalProperties:false) schema. Q1/Q2 (convergence pass 3): the
-Scan stage's own schema was tightened to accept its refusal paths (the `_die` fix); the Apply
-stage's schema was left at its original shape - `{applied, malformed}`, `required: ['applied']` -
-so BOTH of enrich_apply's refusal paths (isolated session, no fence-clean default inbox) would fail
-schema validation the instant they fired, turning a clean, visible refusal into a stage error. These
-are the regression guards for that fix, mirroring test_enrich_prep_guard.py's scan-schema tests."""
+"""enrich_apply is the APPLY stage of enrichment: it prints a JSON handshake consumed under a STRICT
+(additionalProperties:false) schema, now kept in scripts/enrich_handshake.schema.json (until
+October 2026 it lived inside the enrich-swarm workflow file, removed in REVIEW-2026-10.md class
+(f)). Q1/Q2 (convergence pass 3): the Scan stage's own schema was tightened to accept its refusal
+paths (the `_die` fix); the Apply stage's schema was left at its original shape - `{applied,
+malformed}`, `required: ['applied']` - so BOTH of enrich_apply's refusal paths (isolated session, no
+fence-clean default inbox) would fail schema validation the instant they fired, turning a clean,
+visible refusal into a stage error. These are the regression guards for that fix, mirroring
+test_enrich_prep_guard.py's scan-schema tests."""
 import json
 import os
 import re
@@ -18,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import enrich_apply
 import enrich_prep
 
-WORKFLOW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich-swarm.workflow.js")
+SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich_handshake.schema.json")
 
 
 def _mask_js_strings(src):
@@ -59,20 +61,13 @@ def _balanced_end(src, open_at):
 
 
 def _apply_schema():
-    """The apply stage's declared property names and required keys, lifted from the workflow -
-    same technique as test_enrich_prep_guard.py's _scan_schema, so this test follows an edit to
-    either side instead of pinning a stale copy."""
-    with open(WORKFLOW, encoding="utf-8") as fh:
-        src = fh.read()
-    body = src[src.index("label: 'apply'"):]
-    props_at = body.index("properties:")
-    end = _balanced_end(body, props_at)
-    inner = body[body.index("{", props_at) + 1:end]
-    props = set(re.findall(r"(\w+)\s*:\s*\{", inner))
-    props.discard("items")
-    required = set(re.findall(r"'([^']+)'",
-                              body[body.index("required:"):body.index("]", body.index("required:"))]))
-    assert props and required, "failed to lift the apply schema from the workflow file"
+    """The apply stage's declared property names and required keys, read from the handshake schema
+    file - the same source test_enrich_prep_guard.py's _scan_schema reads, so this test follows an
+    edit to either side instead of pinning a stale copy."""
+    with open(SCHEMA, encoding="utf-8") as fh:
+        apply = json.load(fh)["apply"]
+    props, required = set(apply["properties"]), set(apply["required"])
+    assert props and required, "failed to read the apply schema from the handshake file"
     return props, required
 
 
@@ -86,7 +81,7 @@ def _assert_matches_apply_schema(data):
                        % (sorted(extra), data))
 
 
-def test_conv_isolated_refusal_satisfies_the_workflow_apply_schema(tmp_path, capsys, monkeypatch):
+def test_conv_isolated_refusal_satisfies_the_handshake_apply_schema(tmp_path, capsys, monkeypatch):
     """An isolated session REFUSES to apply, and that refusal is a RESULT: it must satisfy the
     same schema a success does. Pre-fix it emitted {applied, malformed, refused} against a schema
     with no `refused` property and only `applied` required - undeclared key AND (harmlessly, since
@@ -103,7 +98,7 @@ def test_conv_isolated_refusal_satisfies_the_workflow_apply_schema(tmp_path, cap
     _assert_matches_apply_schema(data)
 
 
-def test_conv_no_safe_default_inbox_refusal_satisfies_the_workflow_apply_schema(
+def test_conv_no_safe_default_inbox_refusal_satisfies_the_handshake_apply_schema(
         tmp_path, capsys, monkeypatch):
     """The sibling refusal: no fence-clean default inbox exists for this project (a pathological
     refusal vocabulary). Same schema, same requirement - this is the SECOND refusal shape the

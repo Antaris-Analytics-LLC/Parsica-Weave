@@ -358,14 +358,15 @@ def test_conv_clean_chunk_ids_all_stage_with_no_skips(tmp_path, capsys, monkeypa
     assert data["ids"] == ids and data["skipped_fenced"] == 0 and data["count"] == 2
 
 
-# --- the stage-to-workflow HANDSHAKE contract ------------------------------------------------
-# enrich_prep's stdout is consumed by enrich-swarm.workflow.js under a STRICT json schema
-# (additionalProperties:false, safety fields required). Nothing tied the two together, so the
-# schema could tighten - as it did when skipped_fenced became required - while a producer path
-# still emitted a short object, and the failure would surface only at runtime as a mid-stage
-# schema error. The schema is READ OUT of the workflow file rather than restated here, so the
-# test follows an edit to either side instead of pinning a stale copy. (convergence pass 2)
-WORKFLOW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich-swarm.workflow.js")
+# --- the stage HANDSHAKE contract -------------------------------------------------------------
+# enrich_prep's stdout is consumed under a STRICT json schema (additionalProperties:false, safety
+# fields required). Nothing tied the two together, so the schema could tighten - as it did when
+# skipped_fenced became required - while a producer path still emitted a short object, and the
+# failure would surface only at runtime as a mid-stage schema error. The schema is READ OUT of
+# scripts/enrich_handshake.schema.json rather than restated here, so the test follows an edit to
+# either side instead of pinning a stale copy. (Until October 2026 it was read out of the
+# enrich-swarm workflow file, removed in REVIEW-2026-10.md class (f).)
+SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enrich_handshake.schema.json")
 
 
 def _mask_js_strings(src):
@@ -411,20 +412,11 @@ def _balanced_end(src, open_at):
 
 
 def _scan_schema():
-    """The scan stage's declared property names and required keys, lifted from the workflow."""
-    with open(WORKFLOW, encoding="utf-8") as fh:
-        src = fh.read()
-    body = src[src.index("label: 'scan'"):]
-    props_at = body.index("properties:")
-    end = _balanced_end(body, props_at)
-    # scan INSIDE the properties object, not from the "properties:" token itself - starting at the
-    # token captured the container's own name as a property, which quietly widened the allowed set.
-    inner = body[body.index("{", props_at) + 1:end]
-    props = set(re.findall(r"(\w+)\s*:\s*\{", inner))
-    props.discard("items")                         # the array-element schema, not a property
-    required = set(re.findall(r"'([^']+)'",
-                              body[body.index("required:"):body.index("]", body.index("required:"))]))
-    assert props and required, "failed to lift the scan schema from the workflow file"
+    """The scan stage's declared property names and required keys, read from the handshake schema."""
+    with open(SCHEMA, encoding="utf-8") as fh:
+        scan = json.load(fh)["scan"]
+    props, required = set(scan["properties"]), set(scan["required"])
+    assert props and required, "failed to read the scan schema from the handshake file"
     return props, required
 
 
@@ -438,7 +430,7 @@ def _assert_matches_scan_schema(data):
                        % (sorted(extra), data))
 
 
-def test_conv_isolated_refusal_satisfies_the_workflow_scan_schema(tmp_path, capsys, monkeypatch):
+def test_conv_isolated_refusal_satisfies_the_handshake_scan_schema(tmp_path, capsys, monkeypatch):
     """An isolated session REFUSES to stage, and that refusal is a RESULT: it must satisfy the same
     schema a success does. It previously emitted only refused/ids/count/note - two undeclared keys
     and three missing required ones - so the strict schema turned a clean stop into a stage error."""
@@ -453,7 +445,7 @@ def test_conv_isolated_refusal_satisfies_the_workflow_scan_schema(tmp_path, caps
     _assert_matches_scan_schema(data)
 
 
-def test_conv_success_echo_satisfies_the_workflow_scan_schema(tmp_path, capsys, monkeypatch):
+def test_conv_success_echo_satisfies_the_handshake_scan_schema(tmp_path, capsys, monkeypatch):
     """The other direction: the normal staging echo must also match, so the contract test cannot
     pass by only ever exercising the refusal shape."""
     import store
@@ -468,31 +460,28 @@ def test_conv_success_echo_satisfies_the_workflow_scan_schema(tmp_path, capsys, 
     _assert_matches_scan_schema(json.loads(capsys.readouterr().out))
 
 
-def test_conv_skipped_fenced_is_required_by_the_workflow_schema():
-    """The counter is only load-bearing if the workflow REQUIRES it: an absent field reads as falsy
-    in JS, so an optional skipped_fenced silently zeroes the very signal that makes an
-    all-chunks-withheld run visible instead of reading as 'nothing pending'."""
+def test_conv_skipped_fenced_is_required_by_the_handshake_schema():
+    """The counter is only load-bearing if the schema REQUIRES it: an absent field reads as falsy
+    to a careless consumer, so an optional skipped_fenced silently zeroes the very signal that
+    makes an all-chunks-withheld run visible instead of reading as 'nothing pending'."""
     _, required = _scan_schema()
     for key in ("inbox_withheld", "skipped_fenced"):
         assert key in required, "%s must be REQUIRED, not optional - it is a safety signal" % key
 
 
-def test_conv_every_workflow_return_path_reports_the_skip_count():
-    """Structural: each `return {` in the workflow must carry skippedFenced. Both early returns
-    dropped it, and the all-chunks-skipped run lands in the first one - reporting 'nothing pending
-    to enrich' with pending 0, the exact silent enrichment death the counter exists to prevent."""
-    with open(WORKFLOW, encoding="utf-8") as fh:
-        src = fh.read()
-    returns = [m.start() for m in re.finditer(r"return \{", src)]
-    assert len(returns) >= 3, "expected the early-exit, withheld, and normal return paths"
-    for at in returns:
-        # brace-open is the LAST char of "return {" (at + len("return ")); _balanced_end masks
-        # string/template-literal contents first, so a stray brace inside a `note:` message or a
-        # `${...}` interpolation can no longer truncate or overrun the real object boundary
-        # (convergence pass 3 MINOR, self-caught).
-        end = _balanced_end(src, at + len("return "))
-        assert "skippedFenced" in src[at:end], (
-            "a workflow return path omits skippedFenced: %r" % src[at:end][:120])
+def test_conv_handshake_schema_is_strict_and_names_both_stages():
+    """The contract file itself: strict for both stages (no undeclared key can pass) and the
+    safety signals required. Until October 2026 this slot checked that every return path of the
+    enrich-swarm workflow carried skippedFenced; the workflow is gone (REVIEW-2026-10.md, class
+    (f)), and the counter now reaches whoever reads the scan stage's stdout directly, under this
+    schema."""
+    with open(SCHEMA, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    for stage in ("scan", "apply"):
+        assert schema[stage]["additionalProperties"] is False, stage
+        assert set(schema[stage]["required"]) <= set(schema[stage]["properties"]), stage
+    assert "skipped_fenced" in schema["scan"]["required"]
+    assert "inbox_withheld" in schema["scan"]["required"]
 
 
 def test_conv_balanced_end_ignores_braces_inside_strings():

@@ -1,92 +1,55 @@
-# Autonomous Enrichment (Parsica Weave for Claude Code)
+# Enrichment in passes (Parsica Weave for Claude Code)
 
 Enrichment is one of Parsica's largest recall levers: a doc2query overlay (topic, summary,
 keywords, search queries, facts) on every captured memory chunk, so a fact stored one way stays
-retrievable the way you later search for it. The catch has always been operational. Producing
-those overlays by hand at every checkpoint is heavy, so in practice the lever goes unpulled.
+retrievable the way you later search for it.
 
-On Claude Code we close that gap with the substrate's own capability: a background agent swarm.
+## What changed in October 2026
 
-## What happens
+Until October 2026 this file described a background enrichment swarm: a workflow script that the
+~20-turn hook text told the agent to spawn, which fanned out one model worker per pending chunk
+with no cap, hard-coded the model, dropped a failed worker silently, and reported an applied count
+relayed by a model rather than read from the process. That workflow was removed in the integrity
+pass (REVIEW-2026-10.md, pile one, class (f)). Nothing in this plugin starts workers now, and no
+hook text asks the agent to. What remains are two operator-run stages whose counts come from the
+process that did the work.
 
-At each memory checkpoint, instead of asking the agent to hand-author overlays, Weave spawns a
-background **enrichment swarm** and the agent goes back to work. The swarm:
+## The two stages
 
-1. **Scans** the pending chunks (everything captured since the last enrichment pass).
-2. **Fans out** one cheap worker per chunk, in parallel, each writing a terse overlay.
-3. **Applies** the overlays through the store's write gateway, which scrubs every field and
-   honors the human-only fence on the way in.
+- `scripts/enrich_prep.py --cwd <project> [--inbox <dir>] [--limit N]`: the scan stage. Lists
+  pending chunks (captured turns with no overlay yet), drops pure-noise turns, and stages each as a
+  text file in a private per-project inbox under the system temp dir. It stages at most 50 chunks
+  per run (the pending listing it reads returns at most 50); `--limit N` stages fewer, and the
+  next run takes what is still pending. Prints `{ids, count, inbox, inbox_withheld,
+  skipped_fenced}` on stdout.
+- `scripts/enrich_apply.py --cwd <project> [--inbox <dir>]`: the apply stage. Reads
+  `<inbox>/<id>.overlay.json` files, validates each, applies them through the store's write
+  gateway (which scrubs every field and honors the human-only fence), sweeps the staged copies
+  whose overlays landed, and prints `{applied, malformed, swept}` on stdout. Those numbers are
+  counted by the process that did the work, never relayed.
 
-It runs entirely off the main loop and reports when finished. The agent never hand-cranks an
-overlay again; the lever pulls itself, every cadence.
+Between the two stages something has to write the overlay files, and that is the operator's
+choice: by hand from the staged text, or with any tool you run yourself. An overlay is one JSON
+object with the keys `topic`, `summary`, `keywords`, `search_queries`, `facts` and `decisions`;
+the manual path in `skills/weave/SKILL.md` and the `enrich.py --apply-stdin` command in the
+README carry the same shape without the inbox.
 
-## Why cheap and terse
-
-Workers run on a small, fast model (Haiku, or any comparably cheap, fast model; the difference
-at the top is marginal). This is deliberate, and it is about quality, not
-cost: larger models overcomplicate automatic enrichment and add one or two extra words per
-field, and that word-bloat pollutes recall as the store grows. Terse wins. The worker prompt
-enforces shortest-phrasing, and a decision is recorded only when a real decision was made.
-Reserve larger models for enriching dense knowledge packs, where the extra surface is genuinely
-useful.
-
-## Components
-
-- `scripts/enrich_prep.py` - scan stage. Lists pending chunks, drops pure-noise turns, stages
-  each as a text file to a per-project inbox. Prints `{ids, count, inbox}`.
-- `scripts/enrich_apply.py` - apply stage. Reads the workers' overlay files, validates each,
-  applies them through the gateway. Prints `{applied, malformed}`.
-- `scripts/enrich-swarm.workflow.js` - the workflow that runs scan, the Haiku fan-out, and apply
-  as one self-contained invocation.
-- The checkpoint hook (`pcx.py`, `handle_prompt`) spawns the workflow when a checkpoint is due.
-
-## Setup
-
-If Weave's hooks are installed per the README, there is nothing extra to wire. The
-checkpoint directive that arrives roughly every 20 turns tells the agent to spawn the
-workflow and hands it the correct paths:
-
-```
-Workflow({scriptPath: "<scripts>/enrich-swarm.workflow.js",
-          args: {scripts: "<scripts>", cwd: "<project>"}})
-```
-
-The agent runs that call verbatim and returns to work; the swarm reports when done.
-
-Requirements:
-
-- A Claude Code with the Workflow tool available (background agent orchestration).
-- The Weave hooks installed, so checkpoints fire and chunks are being captured.
-
-The `args` the directive passes always reflect the live install location and project,
-so a moved or renamed plugin folder keeps working. A manual run has no editable fallback
-constants: you must pass `args: {scripts: "<abs path to parsica-weave/scripts>", cwd: "<abs
-project dir>"}` on the Workflow invocation, or the workflow throws with a clear message.
+The stdout shapes of both stages are pinned in `scripts/enrich_handshake.schema.json` (strict:
+no other keys, and the safety fields are required) and checked by the test suite.
 
 ## Verification
 
-Three checks, cheapest first:
-
-1. **Pending stays small.** `python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --cwd "<project>" --list-pending`
-   right after a checkpoint should show the backlog draining to zero within a few
-   minutes. A list that only grows means the swarm is not firing.
-2. **Overlays are landing.** `python "${CLAUDE_PLUGIN_ROOT}/scripts/query.py" --grep "<recent topic>" --full`
-   should show `topic=`, categories, and search queries on recent chunks.
-3. **The swarm ran.** The workflow appears in `/workflows` (Scan, Enrich, Apply
-   phases). The apply stage prints `{applied, malformed}`; malformed overlays are
-   dropped by the gateway, never stored raw.
-
-If a fence or scrub guard drops a chunk mid-swarm, that is the gateway working as
-designed: the swarm's output passes the same scrub-before-store wall as every other
-writer.
+1. `python "${CLAUDE_PLUGIN_ROOT}/scripts/enrich.py" --cwd "<project>" --list-pending` shows the
+   backlog; it shrinks when overlays are applied and only then.
+2. `python "${CLAUDE_PLUGIN_ROOT}/scripts/query.py" --grep "<recent topic>" --full` shows
+   `topic=`, categories and search queries on enriched chunks.
+3. The apply stage's printed `applied`, `malformed` and `swept` are the record of a pass; a
+   malformed overlay is dropped by the gateway, never stored raw.
 
 ## Notes
 
-- Cost is not the reason for the small model; recall quality is. Providers are interchangeable.
 - Overlays are stored locally as plain text, in the workspace store under
   `projects/<project-key>/enrich/`. No embeddings or model artifacts are written to the durable
-  record - the store stays model-free; the overlay is the readable semantic layer, not a vector.
-  Generating those overlays is not air-gapped, though: the enrichment workers process staged
-  chunks through the configured Claude deployment, so that text may be included in model requests
-  according to your Claude Code and Anthropic settings. Weave's own code opens no outbound network
-  connections and sends no telemetry.
+  record; the overlay is the readable semantic layer, not a vector. Producing overlays is not
+  air-gapped if you use a model to write them: the staged text goes wherever you send it. Weave's
+  own code opens no outbound network connections and sends no telemetry.
