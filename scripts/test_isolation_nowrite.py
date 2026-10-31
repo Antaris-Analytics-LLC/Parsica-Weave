@@ -56,7 +56,7 @@ def _child_env(root):
     env["PARSICA_ISOLATED"] = "1"
     env["PARSICA_WEAVE_ROOT"] = str(root)
     env["PYTHONIOENCODING"] = "utf-8"
-    for k in ("PARSICA_CHANNEL", "PARSICA_HUMAN_ONLY_CLASSIFIER"):
+    for k in ("PARSICA_CHANNEL",):
         env.pop(k, None)
     env.pop("PARSICA_WEAVE", None)   # ensure the global kill switch is not accidentally off
     return env

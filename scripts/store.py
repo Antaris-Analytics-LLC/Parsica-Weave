@@ -1688,15 +1688,16 @@ def _raw_write(path, text, *, root=None):
 
 # --------------------------------------------------------------------------
 # human-only fence - the do-not-index interlock, evaluated at this gateway BEFORE scrub, so a
-# matching record produces ZERO disk artifacts. Fail-CLOSED sentinel floor: the operator's
-# inline [[human-only]] marker ALWAYS blocks, with no dependency on anything else. An optional
-# external classifier (named by the PARSICA_HUMAN_ONLY_CLASSIFIER env var) can add richer,
-# term-based policy when installed; unset, the sentinel marker is the whole policy. The marker
-# is a routing signal - it carries no policy and never appears in a receipt or a log line.
+# matching record produces ZERO disk artifacts. Two open-code floors and nothing else: the
+# operator's inline [[human-only]] marker ALWAYS blocks, and a configured `human_only_terms`
+# entry blocks as a case-insensitive substring. Nothing here is loaded from the environment: a
+# classifier, if one is ever wanted, is a module in this tree and is reviewed with it (an import
+# path named by an environment variable was removed in October 2026; see REVIEW-2026-10.md).
+# The marker is a routing signal - it carries no policy and never appears in a receipt or a log
+# line.
 # --------------------------------------------------------------------------
 _HUMAN_ONLY_SENTINEL = re.compile(r"\[\[\s*human[-_ ]?only\s*\]\]", re.IGNORECASE)
 _HUMAN_ONLY_RECEIPT = {"stored": False, "reason": "human_only"}
-_CLASSIFIER = None   # cache: None=unchecked, False=absent, tuple=(is_human_only, is_human_only_record)
 
 # The one caveat every retrieval surface prepends to recalled content (hook injection,
 # query.py output, pcx sync digest). Recalled text may quote old conversation or tool output
@@ -1707,32 +1708,9 @@ REFERENCE_CAVEAT = (
 )
 
 
-def _optional_classifier():
-    """Lazy, cached handle to an OPTIONAL external human-only classifier, or None. The module is
-    named by the PARSICA_HUMAN_ONLY_CLASSIFIER env var: a dotted import path to a module exposing
-    is_human_only(text, terms, forced) and is_human_only_record(record, terms, forced). Unset (the
-    default) -> None, and classification is the unconditional sentinel floor above. The import
-    lives INSIDE the call so no hook path ever hard-depends on a plugin."""
-    global _CLASSIFIER
-    if _CLASSIFIER is None:
-        mod = os.environ.get("PARSICA_HUMAN_ONLY_CLASSIFIER")
-        if not mod:
-            _CLASSIFIER = False
-        else:
-            try:
-                import importlib
-                m = importlib.import_module(mod)
-                _CLASSIFIER = (m.is_human_only, m.is_human_only_record)
-            except Exception:
-                _CLASSIFIER = False
-    return _CLASSIFIER or None
-
-
 def _term_hit(text, terms):
-    """The OPEN-CODE human-only floor: a case-insensitive substring match against any configured
-    term. This is what makes `human_only_terms` actually block for a public user with NO classifier
-    installed - the optional external classifier adds richer (e.g. fuzzy/semantic) policy ON TOP,
-    but a configured term is enforced here regardless. A blank/empty term never matches."""
+    """The second open-code floor: a case-insensitive substring match against any configured
+    `human_only_terms` entry. A blank/empty term never matches."""
     if not text or not terms:
         return False
     hay = str(text).casefold()
@@ -1745,26 +1723,19 @@ def _term_hit(text, terms):
 
 def is_human_only_text(text, cfg, forced=False):
     """True if this free text must never be indexed. Two open-code floors - the unconditional
-    [[human-only]] sentinel and a substring match on configured `human_only_terms` - then the
-    optional external classifier's richer policy when installed."""
+    [[human-only]] sentinel and a substring match on configured `human_only_terms` - and nothing
+    else: no module named by the environment is consulted."""
     if forced:
         return True
     terms = (cfg or {}).get("human_only_terms")
     if text and _HUMAN_ONLY_SENTINEL.search(text):
         return True
-    if _term_hit(text, terms):
-        return True
-    fns = _optional_classifier()
-    if fns is not None:
-        ok, _ = fns[0](text, terms=terms, forced=False)
-        return bool(ok)
-    return False
+    return _term_hit(text, terms)
 
 
 def is_human_only_record(record, cfg, forced=False):
     """Record form: the [[human-only]] sentinel AND configured `human_only_terms` are enforced in
-    open code over the serialized content, then the optional classifier's reserved-key-aware walk
-    when installed."""
+    open code over the serialized content, and nothing else."""
     if forced:
         return True
     terms = (cfg or {}).get("human_only_terms")
@@ -1774,13 +1745,7 @@ def is_human_only_record(record, cfg, forced=False):
         blob = str(record)
     if _HUMAN_ONLY_SENTINEL.search(blob):
         return True
-    if _term_hit(blob, terms):
-        return True
-    fns = _optional_classifier()
-    if fns is not None:
-        ok, _ = fns[1](record, terms=terms, forced=False)
-        return bool(ok)
-    return False
+    return _term_hit(blob, terms)
 
 
 def append_record(path, record, cfg, forced=False, content_fields_scrubbed=False):
