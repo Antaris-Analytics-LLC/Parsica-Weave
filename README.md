@@ -475,16 +475,26 @@ on the next hook, no restart needed. What each key does:
   pool at boot, when Spirit is installed. Read-only on your files either way - see "Pairs with
   Parsica Spirit."
 
-Environment: `PARSICA_WEAVE=off` (or `0`/`false`/`no`) disables capture and rehydration for a
-session without uninstalling - the hooks fire in every project once installed, so this is the
-per-session kill switch. `PARSICA_ISOLATED=1` runs a zero-footprint session (full recall, no
-durable writes; see Channels). `PARSICA_WEAVE_ROOT` relocates the workspace; `PARSICA_CHANNEL`
-(set per launch profile) names the session's channel. The human-only fence is the built-in
-`[[human-only]]` sentinel and the configured `human_only_terms`, and nothing else; no module is
-loaded from the environment.
-`PARSICA_ROUTER=off` (or `0`/`false`/`no`) turns off Spirit federation for a session: queries
-return Weave's own results and nothing else, byte-identical to a Weave-only install. It is the
-switch to reach for when you want to isolate whether the durable tier is involved in a result.
+Environment variables. These six are the only ones the scripts read; a test
+(`scripts/test_env_documented.py`) fails if a script reads one this list does not name.
+
+- `PARSICA_WEAVE=off` (or `0`/`false`/`no`) disables capture and rehydration for a session
+  without uninstalling. The hooks fire in every project once installed, so this is the
+  per-session kill switch.
+- `PARSICA_ISOLATED=1` runs a zero-footprint session: full recall, no durable writes (see
+  Channels).
+- `PARSICA_WEAVE_ROOT` relocates the workspace (default `~/.claude/parsica-weave`).
+- `PARSICA_SPIRIT_ROOT` relocates the Spirit store root that `promote`, the native-memory
+  import and federated queries read and write (default `~/.claude/parsica-spirit`); the
+  workspace id is appended to it.
+- `PARSICA_CHANNEL` (set per launch profile) names the session's channel.
+- `PARSICA_ROUTER=off` (or `0`/`false`/`no`) turns off Spirit federation for a session: queries
+  return Weave's own results and nothing else, byte-identical to a Weave-only install. It is the
+  switch to reach for when you want to isolate whether the durable tier is involved in a result.
+
+The human-only fence is the built-in `[[human-only]]` sentinel and the configured
+`human_only_terms`, and nothing else; no module is loaded from the environment. There is no
+switch that opens a file by path: enrichment JSON arrives on stdin or inline.
 
 ## Data, retention, and uninstall
 

@@ -604,13 +604,16 @@ def main():
     ap.add_argument("--apply-stdin", action="store_true",
                     help="read the {chunk_id: {...}} map from STDIN (preferred - no temp file on disk)")
     ap.add_argument("--apply", help="inline JSON: {chunk_id: {topic, summary, ...}}")
-    ap.add_argument("--apply-file", help=argparse.SUPPRESS)   # hidden legacy path, off by default (gated below)
+    # There is no file-path argument. Until October 2026 a hidden one, enabled by an environment
+    # variable, read ANY path given on the command line as enrichment JSON with no containment
+    # check (REVIEW-2026-10.md, pile one, class (d), enrich.py 607 and 631-635). Enrichment JSON
+    # arrives on stdin or inline; nothing is opened by path.
     ap.add_argument("--cwd", default=os.getcwd())
     args = ap.parse_args()
 
     # applying enrichments is a durable write: an isolated (zero-footprint) session refuses it.
     # --list-pending stays available (a pure read).
-    if store.is_isolated() and (args.apply_stdin or args.apply_file or args.apply):
+    if store.is_isolated() and (args.apply_stdin or args.apply):
         sys.stderr.write("parsica enrich refused: PARSICA_ISOLATED=1 (isolated session, "
                          "zero footprint - nothing enriched)\n")
         sys.exit(3)
@@ -625,14 +628,6 @@ def main():
     try:
         if args.apply_stdin:
             mapping = _parse_apply_json(sys.stdin.buffer.read().decode("utf-8", "replace"))  # UTF-8, not cp1252
-        elif args.apply_file:
-            # legacy file path is OFF by default: it advertises a raw-JSON-on-disk enrichment surface
-            # that the preferred --apply-stdin avoids. Opt in explicitly if a workflow truly needs it.
-            if os.environ.get("PARSICA_ALLOW_APPLY_FILE", "").strip().lower() not in ("1", "true", "yes"):
-                sys.stderr.write("--apply-file is disabled by default; pipe JSON via --apply-stdin "
-                                 "(set PARSICA_ALLOW_APPLY_FILE=1 to override)\n")
-                sys.exit(2)
-            mapping = _parse_apply_json(open(args.apply_file, encoding="utf-8").read())
         elif args.apply:
             mapping = _parse_apply_json(args.apply)
     except (json.JSONDecodeError, OSError) as exc:
