@@ -326,16 +326,40 @@ def test_read_json_no_follow_refuses_a_mid_read_identity_swap(tmp_path, monkeypa
     """The read-side twin of atomic_write's descriptor rule (Fable's adopted note): the file is
     proven by lstat, opened by name, and then the DESCRIPTOR is fstat'd and compared to the proof.
     A device/inode change between the two means a link was swapped in after the proof - refuse. With
-    the fstat compare removed, this read would silently return the swapped file's bytes."""
+    the fstat compare removed, this read would silently return the swapped file's bytes.
+
+    The stand-in is scoped to store's own view of the os module, and it changes only the
+    descriptor's identity: every other field is the descriptor's real one. Until October 2026 the
+    test replaced os.fstat for the whole process with an object carrying st_dev and st_ino alone.
+    The store refused as it should, but with current pytest on Python 3.12 and later the runner's
+    own output capture then called os.fstat, read st_size from the stand-in and crashed, so the
+    test failed on every 3.12 leg of CI (REVIEW-2026-10.md, noted during the fixes)."""
     import store
     p = tmp_path / "config.json"
     p.write_text('{"refusal": []}', encoding="utf-8")
+    real_os = store.os
 
-    class _Swapped:                      # an identity the real file can never have
+    class _Swapped:                      # the descriptor's real stat, with an identity the file can never have
         st_dev, st_ino = 0x7FFFFFFF, 0x7FFFFFFF
-    monkeypatch.setattr(store.os, "fstat", lambda _fd: _Swapped())
 
-    with pytest.raises(store.MigrationRefused):
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    class _OsWithSwappedFstat:           # store's os module, with only fstat changed
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+        @staticmethod
+        def fstat(fd):
+            return _Swapped(real_os.fstat(fd))
+
+    monkeypatch.setattr(store, "os", _OsWithSwappedFstat())
+
+    # the refusal must come from the identity compare itself, not from some other check
+    with pytest.raises(store.MigrationRefused, match="changed identity"):
         store._read_json_no_follow(p, tmp_path)
 
 
