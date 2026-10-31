@@ -47,7 +47,8 @@ parsica-weave query --grep "something you said"
 parsica-weave name --name Aria
 ```
 
-From here capture is automatic; point your agent at `ONBOARDING.md` for its first thread.
+From here capture is automatic. `ONBOARDING.md` explains what the agent does with the store
+and the habits worth checking for.
 
 ## Contents
 
@@ -151,8 +152,7 @@ parsica-weave/
     weave/
       SKILL.md                # agent-facing discipline + reference
   README.md                   # this file
-  ONBOARDING.md               # the agent's first thread: habits, the router, first 15 minutes
-  TO_THE_NEXT_AGENT.md        # one agent's own account of a real release night - what it felt like to use this for real
+  ONBOARDING.md               # for the person who installed Weave: what the agent does with the store, the router, the first 15 minutes
   AUTONOMOUS_ENRICHMENT.md    # enrichment in passes: the two operator-run stages, and what was removed
   config.example.json         # every config key, real defaults, valid JSON - copy, don't retype
   scripts/
@@ -218,9 +218,9 @@ parsica-weave query --grep "something you said"
 From here, capture is automatic. Every session in every project feeds the same
 workspace, and the agent wakes up in any of them already knowing all of it.
 
-3. Point your agent at `ONBOARDING.md`. It is the agent's first thread: the retrieval
-   habit that makes the store worth having, the two-floor router, and a first-fifteen-
-   minutes checklist. Written by the first agent onboarded, for the next one.
+3. Read `ONBOARDING.md`. It explains what the agent does with the store: the retrieval
+   habit that makes it worth having, the two-floor router, and a first-fifteen-minutes
+   checklist to watch the agent work through.
 
 Until the pile-one pull requests listed in REVIEW-2026-10.md merge, treat the scrub as best effort and keep sensitive material out.
 

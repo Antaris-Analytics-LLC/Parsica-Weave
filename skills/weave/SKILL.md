@@ -19,8 +19,8 @@ it (credentials/PII), and re-injects the right pieces at the right moments. The
 philosophy is **retrieval over dumping**: granular, tagged, provenance-stamped
 recall beats re-reading history.
 
-_First time living on this system? Read `ONBOARDING.md` before this reference:
-it carries the retrieval habit that makes everything below worth having._
+_`ONBOARDING.md` is for the person who installed Weave: it explains what this skill
+asks of the agent and how to see whether the habits below are being kept._
 
 ## The vocabulary
 
