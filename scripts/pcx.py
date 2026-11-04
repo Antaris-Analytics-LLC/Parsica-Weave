@@ -660,11 +660,13 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
         # nothing yet on disk. Per-window (per-PID) shard so concurrent windows append to
         # DIFFERENT files (a shared day-file append is a silent lost write on Windows).
         # _build_chunk runs the human-only fence on the RAW turn first, then scrubs every value
-        # BEFORE truncating, so the append passes content_fields_scrubbed (no redundant second
-        # scrub); the gateway's own human_only check and the reserved-key metadata validation still
-        # run there. Every refusal and every failure below is RECORDED (store.audit_line): until
-        # October 2026 the gateway's receipt was discarded and any error was a bare continue
-        # (REVIEW-2026-10.md, pile one, class (a), pcx.py 661-667).
+        # BEFORE truncating, so a secret cannot survive the cut; the gateway then scrubs the
+        # finished chunk again, as it scrubs every record (the one door has had no bypass since
+        # October 2026; REVIEW-2026-10.md, follow-up, class (a)), and runs its own human_only
+        # check and the reserved-key metadata validation. Every refusal and every failure below
+        # is RECORDED (store.audit_line): until October 2026 the gateway's receipt was discarded
+        # and any error was a bare continue (REVIEW-2026-10.md, pile one, class (a), pcx.py
+        # 661-667).
         for turn in _chunk_turns(flush_records):
             try:
                 head = turn["prompt"] or (turn["recs"][0] if turn["recs"] else {})
@@ -680,7 +682,7 @@ def _flush_mirror(cwd, tpath, sess_key, cfg, state, hold_trailing=False, advance
                 if ccid and ccid in dseen:
                     continue
                 shard = md / f"{date}.{os.getpid()}.jsonl"
-                result = store.append_record(shard, chunk, cfg, content_fields_scrubbed=True)
+                result = store.append_record(shard, chunk, cfg)
                 if isinstance(result, dict) and result.get("stored") is False:
                     # the gateway refused the finished chunk: recorded, never discarded
                     store.audit_line("capture_refused", event="mirror",
@@ -1924,6 +1926,7 @@ def handle_name(argv):
 
       name                       show name, byline state, config path, preview
       name --name NAME           set the workspace display name
+      name --name-stdin          set the display name to the text on standard input (the /name command)
       name --byline on|off|name-only     on = [Name] + session tag, name-only = warm [Name], off = none
       name --reset               unset name + byline; back to no-name, no-byline, never-nagged
 
@@ -1937,11 +1940,24 @@ def handle_name(argv):
     ap = argparse.ArgumentParser(prog="pcx.py name",
                                  description="Weave agent identity (workspace-global: one name, no scope).")
     ap.add_argument("--name", help="set the workspace display name")
+    ap.add_argument("--name-stdin", action="store_true", dest="name_stdin",
+                    help="set the workspace display name to the text on standard input; the /name "
+                         "slash command uses this so a quote, a backslash or a dollar sign in the "
+                         "name is data to this process and never reaches the shell")
     ap.add_argument("--reset", action="store_true",
                     help="unset name + byline keys; back to the no-name, no-byline, never-nagged state")
     ap.add_argument("--byline", choices=["on", "off", "name-only"],
                     help="on = [Name] + session tag, name-only = warm [Name], off = no byline")
     args = ap.parse_args(argv[1:])
+    if args.name_stdin:
+        if args.name is not None:
+            ap.error("--name-stdin and --name cannot be combined")
+        # The whole of standard input is the name, read verbatim with only the trailing line break
+        # removed: nothing is split, expanded or run. Until October 2026 the /name command spliced
+        # the text into a double-quoted shell argument, where a quote ended the argument and a
+        # dollar sign or a backtick expanded (REVIEW-2026-10.md, follow-up, class (g)). The
+        # write-time gate below judges the result exactly as it judges a name from the command line.
+        args.name = sys.stdin.buffer.read().decode("utf-8", "replace").rstrip("\r\n")
 
     mutating = bool(args.reset or args.name is not None or args.byline is not None)
     if _isolated() and mutating:
@@ -1996,6 +2012,35 @@ def _config_write(fn, *a, **kw):
         raise SystemExit(4)
 
 
+def _argv_from_stdin(ap, tail, flag="--stdin"):
+    """The slash commands hand the user's text to a verb over STANDARD INPUT, as the body of a
+    heredoc whose delimiter is quoted, so a quote, a backslash or a dollar sign in that text is
+    data to this process and never reaches the shell. Until October 2026 the commands spliced the
+    text into the shell line itself (REVIEW-2026-10.md, follow-up, class (g): commands/refusal.md 9
+    and commands/human-only.md 9 unquoted, commands/name.md 9 inside double quotes).
+
+    When `flag` is among the command-line arguments, the whole argument line is read from stdin and
+    split the way a POSIX shell splits a quoted word list (shlex: quotes group, a backslash escapes,
+    nothing is expanded and nothing is run). The caller parses that list with the same parser it
+    uses for the command line, so the two forms accept one grammar. The text is never echoed on any
+    path: it may hold the term."""
+    if flag not in tail:
+        return tail
+    if [a for a in tail if a != flag]:
+        ap.error("--stdin takes the whole argument line from standard input; give no other argument")
+    import shlex
+    text = sys.stdin.buffer.read().decode("utf-8", "replace")
+    try:
+        words = shlex.split(text, comments=False, posix=True)
+    except ValueError:
+        store.emit_text("refused: the argument line on standard input has an unbalanced quote. "
+                        "Nothing changed.")
+        raise SystemExit(2)
+    if flag in words:
+        ap.error("--stdin cannot appear inside the standard-input argument line")
+    return words
+
+
 _POLICY_VERBS = {
     "refusal": ("refusal", "refusal",
                 "redacted to <redacted> everywhere content reaches the store"),
@@ -2011,6 +2056,7 @@ def handle_policy(argv):
       refusal --add TERM          add to this workspace's list (idempotent)
       refusal --remove TERM       remove it, with a readback of what that changes
       refusal --project           operate on THIS project's list instead of the workspace one
+      refusal --stdin             read the whole argument line from standard input (the slash commands)
 
     `human-only` is the same verb over the stronger list. Two verbs rather than one with a mode
     flag, because the two lists do genuinely different things and a flag would let a slip put a
@@ -2035,7 +2081,19 @@ def handle_policy(argv):
     ap.add_argument("--project", action="store_true",
                     help="operate on THIS project's list instead of the workspace-wide one")
     ap.add_argument("--cwd", default=os.getcwd(), help="project directory (with --project)")
-    args = ap.parse_args(argv[1:])
+    ap.add_argument("--stdin", action="store_true",
+                    help="read the whole argument line from standard input instead of the command "
+                         "line; the slash commands use this so a quote, a backslash or a dollar sign "
+                         "in a term is data to this process and never reaches the shell")
+    words = _argv_from_stdin(ap, argv[1:])
+    args, extra = ap.parse_known_args(words)
+    if extra:
+        # Most often a multi-word term typed without quotes. argparse's own message would echo the
+        # stray words, and TERM is never echoed on any path, so the refusal is a constant.
+        store.emit_text("refused: unexpected extra argument(s). The verb takes --add TERM, "
+                        "--remove TERM, --project and --cwd DIR; a term with spaces goes in quotes. "
+                        "Nothing changed.")
+        raise SystemExit(2)
 
     if args.add is not None and args.remove is not None:
         ap.error("--add and --remove cannot be combined")
@@ -2154,8 +2212,13 @@ def handle_sync(argv):
     """Deliberate catch-up (the sync verb): print a compact digest of the last N hours across
     the WHOLE workspace mirror (every project), own-channel chunks excluded - a lane spans
     projects, so the digest does too. Rows are labeled [<project-key> · <channel-or-sess>]:
-    channel name when tagged, session id otherwise. Read-only - nothing is written; the
-    mirror is already scrubbed at capture, so the digest inherits that."""
+    channel name when tagged, session id otherwise. Read-only - nothing is written.
+
+    Every gist shown is scrubbed HERE, before the cut, with PII ON and the workspace-wide refusal
+    union, whatever the source project's own scrub_pii setting was: a project may opt out of PII
+    scrubbing for its own store, and until October 2026 this digest showed that project's raw PII
+    to every other project through a sink that applied only the refusal fence (REVIEW-2026-10.md,
+    follow-up, class (a), RF 9)."""
     import argparse
     from datetime import datetime, timedelta, timezone
     ap = argparse.ArgumentParser(prog="pcx.py sync")
@@ -2186,11 +2249,15 @@ def handle_sync(argv):
     names = {cid: ((m.get("name") or cid) if isinstance(m, dict) else cid)
              for cid, m in reg["channels"].items()}
     lines = []
+    union = store.workspace_refusal_terms()
     for key, c in rows:
         t = store.local_stamp(c.get("ts"))   # display is LOCAL; the stored ts stays UTC
         ch = c.get("chan") or ""
         label = names.get(ch, ch) if ch else (str(c.get("sess") or "") or "untagged")
-        gist = (c.get("user") or c.get("asst") or "")[:160].replace("\n", " ")
+        # scrub the WHOLE stored text with PII on, then cut: a secret or an address cannot
+        # survive at the cut, and the source project's scrub_pii opt-out does not reach here
+        clean, _ = scrub.scrub(str(c.get("user") or c.get("asst") or ""), scrub_pii=True, refusal=union)
+        gist = clean[:160].replace("\n", " ")
         lines.append(f"- {t} [{key} · {label}] {gist}")
     hdr = (f"[parsica-weave] sync: last {args.hours:g}h across the workspace - "
            f"{len(rows)} chunk(s), {store.local_zone_note()}"

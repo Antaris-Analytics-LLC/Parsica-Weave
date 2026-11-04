@@ -103,8 +103,7 @@ def test_a_torn_tail_no_longer_destroys_the_next_good_record():
     # a good record, then a TORN write (partial JSON, no trailing newline)
     shard.write_text(json.dumps({"id": "good-1", "text": "survives"}) + "\n"
                      + '{"id": "torn-1", "text": "died mid-wr', encoding="utf-8")
-    store.append_record(shard, {"id": "good-2", "text": "must survive"}, cfg,
-                        content_fields_scrubbed=True)
+    store.append_record(shard, {"id": "good-2", "text": "must survive"}, cfg)
     rows = store.read_jsonl_rows(shard)
     ids = [r.get("id") for r in rows]
     assert "good-2" in ids, "the appended record was glued onto the torn tail and lost"
@@ -119,8 +118,8 @@ def test_polarity_a_clean_tail_gets_no_extra_blank_line():
     store.ensure_workspace(cwd)
     cfg = store.load_config(cwd)
     shard = _mirror_shard(cwd)
-    store.append_record(shard, {"id": "r1", "text": "first"}, cfg, content_fields_scrubbed=True)
-    store.append_record(shard, {"id": "r2", "text": "second"}, cfg, content_fields_scrubbed=True)
+    store.append_record(shard, {"id": "r1", "text": "first"}, cfg)
+    store.append_record(shard, {"id": "r2", "text": "second"}, cfg)
     lines = shard.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2 and all(l.strip() for l in lines), \
         "the guard inserted a spurious blank line on a healthy file: %r" % lines

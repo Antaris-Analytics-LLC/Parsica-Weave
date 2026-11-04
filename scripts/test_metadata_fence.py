@@ -4,8 +4,9 @@
 
 The store spares reserved-key SCALARS from the text-scrub so a refusal term can't rewrite an id and
 break dedup. That is only safe if the value really IS metadata: a hostile transcript can put a secret
-in `timestamp`/`sessionId`, and the mirror path skips the content scrub entirely. These tests drive the
-capture path (the exact thing GPT 5.6's review attacked) and the gateway with hostile inputs, and prove:
+in `timestamp`/`sessionId`, and until October 2026 the mirror path skipped the gateway's content scrub
+by flag (it scrubbed before the cut and declared the record clean). These tests drive the capture path
+(the exact thing GPT 5.6's review attacked) and the gateway with hostile inputs, and prove:
   - a secret/refusal in a reserved key never reaches disk (source canonicalization + gateway validation),
   - genuine metadata (a real ISO ts, a uuid id, a version spec) round-trips verbatim (dedup intact),
   - the validator has teeth (it transforms hostile input, and it is not a scrub-everything hammer).
@@ -120,20 +121,23 @@ def test_valid_metadata_survives_capture():
 
 
 # --- gateway unit tests ----------------------------------------------------------------------------
-def test_gateway_fast_path_validates_reserved_keys():
-    """content_fields_scrubbed=True (the mirror fast path) must STILL validate metadata: a secret in a
-    reserved key is caught even though the content scrub is skipped."""
+def test_gateway_has_no_bypass_and_scrubs_content_and_reserved_keys_alike():
+    """Until October 2026 content_fields_scrubbed=True (the mirror fast path) skipped the content scrub
+    and only validated metadata (REVIEW-2026-10.md, follow-up, class (a), RF 10). The parameter is gone:
+    every record takes the one path, where content is scrubbed and reserved keys are validated."""
+    import inspect
+    assert "content_fields_scrubbed" not in inspect.signature(store.append_record).parameters
     cfg = _fresh()
     shard = store.mirror_dir(CWD) / "2026-07-03.9.jsonl"
     rec = {"id": SECRET,                                   # slug-shaped secret -> secrets-scrub strips it
            "ts": "not-a-timestamp " + REFUSAL,             # non-ISO + refusal -> full scrub
            "at": "also " + REFUSAL + " bad",               # non-ISO -> full scrub
-           "user": "already-scrubbed clean content"}       # content: caller pre-scrubbed, left untouched
-    store.append_record(shard, rec, cfg, content_fields_scrubbed=True)
+           "user": "content the caller never scrubbed: " + SECRET + " and " + REFUSAL}
+    store.append_record(shard, rec, cfg)
     text = shard.read_text(encoding="utf-8")
     assert SECRET not in text
     assert REFUSAL not in text
-    assert "already-scrubbed clean content" in text        # content is NOT re-touched on the fast path
+    assert "content the caller never scrubbed" in text     # the clean part of the content is kept
 
 
 def test_gateway_full_path_validates_reserved_keys():
@@ -152,7 +156,7 @@ def test_gateway_spares_genuine_metadata():
     shard = store.mirror_dir(CWD) / "2026-07-03.7.jsonl"
     rec = {"id": "cid-" + "a" * 20, "sess": "s-" + "b" * 16, "ts": "2026-07-12T08:36:00Z",
            "at": "2026-07-12T08:36:00Z", "spec": "ctx-enrich/v2", "weight": 1.5, "run_id": "deadbeef00"}
-    store.append_record(shard, rec, cfg, content_fields_scrubbed=True)
+    store.append_record(shard, rec, cfg)
     stored = json.loads(shard.read_text(encoding="utf-8").splitlines()[0])
     for k, v in rec.items():
         assert stored[k] == v, "genuine metadata key %s was altered: %r != %r" % (k, stored[k], v)

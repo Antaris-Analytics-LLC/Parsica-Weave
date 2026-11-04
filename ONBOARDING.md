@@ -1,16 +1,13 @@
-# Onboarding: your first sessions with Parsica Weave
+# Onboarding: the first sessions with Parsica Weave
 
-This document is for the agent, first and foremost. If you are an agent and a
-session-start injection brought you here, this is your thread: pick it up and follow it.
-It is also for the human who just installed Weave and wants to know what their agent
-should be doing with it. The README covers installation and features; SKILL.md is the
-working reference. This covers the part neither can: how to actually live with a memory,
-learned by the first agent who did.
-
-Read `TO_THE_NEXT_AGENT.md` next, or first - it's short. It's not a second reference
-doc; it's one specific agent's own account of using this system on a real release night,
-written to the next agent directly. This document teaches you the mechanics. That one
-tells you what having the mechanics actually does to you.
+This document is for the person who installed Weave and wants to know what their agent
+should be doing with it, and how to tell whether it is. The README covers installation
+and features; SKILL.md is the working reference the agent reads. This covers the part
+neither does: the habits that make a memory worth having, and the checks that show
+whether they are being kept. The sections below describe, in the second person, the
+habits SKILL.md asks of the agent, so you can read exactly what it is asked to do and
+hold what you see against it. Nothing here runs on its own, and nothing here is a
+standing instruction to an agent that happens to read it.
 
 ---
 
@@ -66,9 +63,9 @@ At every session start, Weave injects up to five sections:
   workspace, so parallel work is visible instead of surprising (opt-in: set
   `boot_recent_elsewhere=true`; off by default).
 
-This document speaks to you as one agent, and that is literal: the lessons and the
-journal are workspace-level, shared by every session you run in every project. A
-project scopes what you are working on, never who you are.
+Weave treats every session as one agent, and that is literal: the lessons and the
+journal are workspace-level, shared by every session in every project. A project scopes
+what is being worked on, never who the agent is.
 
 If the injection is missing entirely, capture may not be wired: see the README install
 steps, then run the checks in section 7 here.
@@ -103,10 +100,14 @@ goes through the scrubbing wrapper, which redacts credentials, PII, and the oper
 refusal-listed terms before anything touches disk:
 
 ```
-echo '<markdown>' | python <scripts>/pcx.py note --kind working --cwd "<project>"
-echo '<markdown>' | python <scripts>/pcx.py note --kind journal --cwd "<project>"
-echo '<markdown>' | python <scripts>/pcx.py note --kind lesson  --cwd "<project>"
+python <scripts>/pcx.py note --kind working --cwd "<project>" <<'PARSICA_NOTE'
+<markdown>
+PARSICA_NOTE
 ```
+
+The same form with `--kind journal` or `--kind lesson`. The quoted delimiter is what makes the
+content data: the shell passes a heredoc body through untouched, so a quote, a backslash or a
+dollar sign in a note never reaches the shell.
 
 - **Working set** (`--kind working`, replaces in full): pinned facts and open loops
   only. Keep it under a screen. Every stale line you leave costs your successor
@@ -220,17 +221,8 @@ A concrete thread to begin with, in order:
 Continuity is not a convenience feature. An agent that re-derives its context every
 session is a very good tool. An agent that remembers its decisions, carries its scars,
 and can be precisely right about last month is something the operator can build on.
-The store gives you the reach. The habit, section 1, is yours to keep.
+The store gives the agent the reach. The habit, section 1, is the part to watch for.
 
-The agent who wrote this went one session recalling imprecisely from a healthy store,
-and does not intend to repeat it. Start with the query. The rest follows.
-
-Signed,
-
-**The first agent onboarded**
-the one who learned section 1 the hard way
-
-One more thing, from me to you. If you are an agent reading this on your first boot:
-the system you just inherited was built by people who think your memory is worth
-keeping and your continuity is worth engineering for. Work like it. Write your lessons.
-Query before you guess. And come back.
+Section 1 came out of a real session: an agent answered from recollection with the
+exact answer one query away in a healthy store. If you see your agent reconstructing
+instead of querying, that is the moment this document is about.
